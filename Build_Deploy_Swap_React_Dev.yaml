@@ -1,0 +1,199 @@
+# Build_Deploy_Swap_React_Dev.yaml
+# React 18 + Vite 7 Pipeline
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - 'src/*'        # Adjust if React is in subfolder
+
+variables:
+  - name: tag
+    value: '$(Build.BuildId)'
+  - name: nodeVersion
+    value: '24.x'
+
+  # Dev environment variables
+  - name: devResourceGroupName
+    value: 'PZI-GXUS-N-RGP-LGUNK-D001'   # UPDATE if different
+  - name: devAppName
+    value: '<your-react-app-name-dev>'    # UPDATE THIS
+  - name: devAzureSubscription
+    value: 'NGC-Dev-ResQ'
+  - name: devSlotName
+    value: 'react-deploy'                 # UPDATE THIS
+
+  # Prod environment variables
+  - name: prodResourceGroupName
+    value: 'PZI-GXUS-N-RGP-LGUNK-P001'   # UPDATE if different
+  - name: prodAppName
+    value: '<your-react-app-name-prod>'   # UPDATE THIS
+  - name: prodAzureSubscription
+    value: 'NGC-Prod-ResQ'                # UPDATE THIS
+  - name: prodSlotName
+    value: 'react-deploy'                 # UPDATE THIS
+
+stages:
+  # ============================================
+  # Stage 1: Build
+  # ============================================
+  - stage: Build
+    displayName: Build and publish stage
+    jobs:
+      - job: Build
+        displayName: Build job
+        timeoutInMinutes: 0
+        pool:
+          name: 'NGC_Self-Hosted'
+        steps:
+          # Install Node.js
+          - task: NodeTool@0
+            displayName: 'Install Node.js $(nodeVersion)'
+            inputs:
+              versionSpec: '$(nodeVersion)'
+
+          # Install dependencies
+          - task: Npm@1
+            displayName: 'npm install'
+            inputs:
+              command: 'install'
+              workingDir: '$(Build.SourcesDirectory)'
+
+          # Run tests (optional - remove if no tests)
+          - task: Npm@1
+            displayName: 'npm test'
+            inputs:
+              command: 'custom'
+              workingDir: '$(Build.SourcesDirectory)'
+              customCommand: 'run test -- --run'
+            continueOnError: true
+
+          # Build React app with Vite
+          - task: Npm@1
+            displayName: 'npm run build'
+            inputs:
+              command: 'custom'
+              workingDir: '$(Build.SourcesDirectory)'
+              customCommand: 'run build'
+
+          # Archive build output (Vite outputs to 'dist')
+          - task: ArchiveFiles@2
+            displayName: 'Archive build files'
+            inputs:
+              rootFolderOrFile: '$(Build.SourcesDirectory)/dist'
+              includeRootFolder: false
+              archiveType: 'zip'
+              archiveFile: '$(Build.ArtifactStagingDirectory)/react-app-$(Build.BuildId).zip'
+              replaceExistingArchive: true
+
+          # Publish artifact
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish artifact'
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)'
+              artifact: 'drop'
+              publishLocation: 'pipeline'
+
+  # ============================================
+  # Stage 2: Deploy to DEV
+  # ============================================
+  - stage: DEV
+    dependsOn:
+      - Build
+    displayName: Deploy to DEV
+    jobs:
+      - job: Deploy
+        displayName: Deploy to Dev Job
+        timeoutInMinutes: 0
+        pool:
+          name: 'NGC_Self-Hosted'
+        steps:
+          # Download artifact
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download artifact'
+            inputs:
+              buildType: 'current'
+              artifactName: 'drop'
+              targetPath: '$(Pipeline.Workspace)'
+
+          # Deploy to Azure App Service slot
+          - task: AzureRmWebAppDeployment@4
+            displayName: 'Deploy to Dev App Service'
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: '$(devAzureSubscription)'
+              appType: 'webApp'
+              WebAppName: '$(devAppName)'
+              deployToSlotOrASE: true
+              ResourceGroupName: '$(devResourceGroupName)'
+              SlotName: '$(devSlotName)'
+              packageForLinux: '$(Pipeline.Workspace)/*.zip'
+              enableCustomDeployment: true
+              DeploymentType: 'zipDeploy'
+              TakeAppOfflineFlag: false
+
+  # ============================================
+  # Stage 3: Deploy to PROD slot (main branch only)
+  # ============================================
+  - stage: PROD
+    dependsOn:
+      - Build
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    displayName: Deploy to PROD
+    jobs:
+      - job: Deploy
+        displayName: Deploy to Prod Job
+        timeoutInMinutes: 0
+        pool:
+          name: 'NGC_Self-Hosted'
+        steps:
+          # Download artifact
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download artifact'
+            inputs:
+              buildType: 'current'
+              artifactName: 'drop'
+              targetPath: '$(Pipeline.Workspace)'
+
+          # Deploy to Azure App Service slot
+          - task: AzureRmWebAppDeployment@4
+            displayName: 'Deploy to Prod App Service'
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: '$(prodAzureSubscription)'
+              appType: 'webApp'
+              WebAppName: '$(prodAppName)'
+              deployToSlotOrASE: true
+              ResourceGroupName: '$(prodResourceGroupName)'
+              SlotName: '$(prodSlotName)'
+              packageForLinux: '$(Pipeline.Workspace)/*.zip'
+              enableCustomDeployment: true
+              DeploymentType: 'zipDeploy'
+              TakeAppOfflineFlag: false
+
+  # ============================================
+  # Stage 4: Swap slots (main branch only)
+  # ============================================
+  - stage: SWAP
+    dependsOn:
+      - PROD
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    displayName: Swap Production Slots
+    jobs:
+      - job: Swap
+        displayName: Swap Prod
+        timeoutInMinutes: 0
+        pool:
+          name: 'NGC_Self-Hosted'
+        steps:
+          - task: AzureAppServiceManage@0
+            displayName: 'Swap Slots'
+            inputs:
+              azureSubscription: '$(prodAzureSubscription)'
+              Action: 'Swap Slots'
+              WebAppName: '$(prodAppName)'
+              ResourceGroupName: '$(prodResourceGroupName)'
+              SourceSlot: '$(prodSlotName)'
