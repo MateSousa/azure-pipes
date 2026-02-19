@@ -1,0 +1,289 @@
+# Plan_Deploy_Terraform.yaml
+# Terraform Infrastructure Pipeline — Dev & Prod with approval gate
+
+trigger:
+  branches:
+    include:
+      - '*'
+  paths:
+    include:
+      - 'terraform/*'
+
+variables:
+  # Terraform
+  - name: terraformVersion
+    value: '1.9.x'
+  - name: terraformWorkingDirectory
+    value: '$(Build.SourcesDirectory)/terraform'
+
+  # Dev environment
+  - name: devResourceGroupName
+    value: 'PZI-GXUS-N-RGP-LGUNK-D001'           # UPDATE if different
+  - name: devAzureSubscription
+    value: 'NGC-Dev-ResQ'
+  - name: devBackendStorageAccount
+    value: '<dev-storage-account>'                 # UPDATE THIS
+  - name: devBackendContainerName
+    value: 'tfstate'
+  - name: devBackendKey
+    value: 'dev.terraform.tfstate'
+
+  # Prod environment
+  - name: prodResourceGroupName
+    value: 'PZI-GXUS-N-RGP-LGUNK-P001'           # UPDATE if different
+  - name: prodAzureSubscription
+    value: 'NGC-Prod-ResQ'
+  - name: prodBackendStorageAccount
+    value: '<prod-storage-account>'                # UPDATE THIS
+  - name: prodBackendContainerName
+    value: 'tfstate'
+  - name: prodBackendKey
+    value: 'prod.terraform.tfstate'
+
+stages:
+  # ============================================
+  # Stage 1: Validate
+  # Runs on ALL branches
+  # ============================================
+  - stage: Validate
+    displayName: Terraform Validate
+    jobs:
+      - job: Validate
+        displayName: Validate Terraform configuration
+        pool:
+          name: 'NGC_Self-Hosted'
+        steps:
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform $(terraformVersion)'
+            inputs:
+              terraformVersion: '$(terraformVersion)'
+
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Init'
+            inputs:
+              provider: 'azurerm'
+              command: 'init'
+              workingDirectory: '$(terraformWorkingDirectory)'
+              backendServiceArm: '$(devAzureSubscription)'
+              backendAzureRmResourceGroupName: '$(devResourceGroupName)'
+              backendAzureRmStorageAccountName: '$(devBackendStorageAccount)'
+              backendAzureRmContainerName: '$(devBackendContainerName)'
+              backendAzureRmKey: '$(devBackendKey)'
+
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Validate'
+            inputs:
+              provider: 'azurerm'
+              command: 'validate'
+              workingDirectory: '$(terraformWorkingDirectory)'
+
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Format Check'
+            inputs:
+              provider: 'azurerm'
+              command: 'custom'
+              workingDirectory: '$(terraformWorkingDirectory)'
+              customCommand: 'fmt'
+              commandOptions: '-check -recursive'
+
+  # ============================================
+  # Stage 2: Plan Dev
+  # Runs on ALL branches
+  # ============================================
+  - stage: PlanDev
+    displayName: Plan Dev
+    dependsOn: Validate
+    jobs:
+      - job: PlanDev
+        displayName: Terraform Plan (Dev)
+        pool:
+          name: 'NGC_Self-Hosted'
+        steps:
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform $(terraformVersion)'
+            inputs:
+              terraformVersion: '$(terraformVersion)'
+
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Init'
+            inputs:
+              provider: 'azurerm'
+              command: 'init'
+              workingDirectory: '$(terraformWorkingDirectory)'
+              backendServiceArm: '$(devAzureSubscription)'
+              backendAzureRmResourceGroupName: '$(devResourceGroupName)'
+              backendAzureRmStorageAccountName: '$(devBackendStorageAccount)'
+              backendAzureRmContainerName: '$(devBackendContainerName)'
+              backendAzureRmKey: '$(devBackendKey)'
+
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Plan'
+            inputs:
+              provider: 'azurerm'
+              command: 'plan'
+              workingDirectory: '$(terraformWorkingDirectory)'
+              environmentServiceNameAzureRM: '$(devAzureSubscription)'
+              commandOptions: '-var-file=environments/dev.tfvars -out=dev.tfplan'
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Dev Plan'
+            inputs:
+              targetPath: '$(terraformWorkingDirectory)/dev.tfplan'
+              artifact: 'dev-tfplan'
+              publishLocation: 'pipeline'
+
+  # ============================================
+  # Stage 3: Apply Dev
+  # Runs on MAIN branch only
+  # ============================================
+  - stage: ApplyDev
+    displayName: Apply Dev
+    dependsOn: PlanDev
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: ApplyDev
+        displayName: Terraform Apply (Dev)
+        pool:
+          name: 'NGC_Self-Hosted'
+        environment: 'Dev'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: DownloadPipelineArtifact@2
+                  displayName: 'Download Dev Plan'
+                  inputs:
+                    buildType: 'current'
+                    artifactName: 'dev-tfplan'
+                    targetPath: '$(terraformWorkingDirectory)'
+
+                - task: TerraformInstaller@1
+                  displayName: 'Install Terraform $(terraformVersion)'
+                  inputs:
+                    terraformVersion: '$(terraformVersion)'
+
+                - task: TerraformTaskV4@4
+                  displayName: 'Terraform Init'
+                  inputs:
+                    provider: 'azurerm'
+                    command: 'init'
+                    workingDirectory: '$(terraformWorkingDirectory)'
+                    backendServiceArm: '$(devAzureSubscription)'
+                    backendAzureRmResourceGroupName: '$(devResourceGroupName)'
+                    backendAzureRmStorageAccountName: '$(devBackendStorageAccount)'
+                    backendAzureRmContainerName: '$(devBackendContainerName)'
+                    backendAzureRmKey: '$(devBackendKey)'
+
+                - task: TerraformTaskV4@4
+                  displayName: 'Terraform Apply'
+                  inputs:
+                    provider: 'azurerm'
+                    command: 'apply'
+                    workingDirectory: '$(terraformWorkingDirectory)'
+                    environmentServiceNameAzureRM: '$(devAzureSubscription)'
+                    commandOptions: 'dev.tfplan'
+
+  # ============================================
+  # Stage 4: Plan Prod
+  # Runs on MAIN branch only
+  # ============================================
+  - stage: PlanProd
+    displayName: Plan Prod
+    dependsOn: ApplyDev
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: PlanProd
+        displayName: Terraform Plan (Prod)
+        pool:
+          name: 'NGC_Self-Hosted'
+        steps:
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform $(terraformVersion)'
+            inputs:
+              terraformVersion: '$(terraformVersion)'
+
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Init'
+            inputs:
+              provider: 'azurerm'
+              command: 'init'
+              workingDirectory: '$(terraformWorkingDirectory)'
+              backendServiceArm: '$(prodAzureSubscription)'
+              backendAzureRmResourceGroupName: '$(prodResourceGroupName)'
+              backendAzureRmStorageAccountName: '$(prodBackendStorageAccount)'
+              backendAzureRmContainerName: '$(prodBackendContainerName)'
+              backendAzureRmKey: '$(prodBackendKey)'
+
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Plan'
+            inputs:
+              provider: 'azurerm'
+              command: 'plan'
+              workingDirectory: '$(terraformWorkingDirectory)'
+              environmentServiceNameAzureRM: '$(prodAzureSubscription)'
+              commandOptions: '-var-file=environments/prod.tfvars -out=prod.tfplan'
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Prod Plan'
+            inputs:
+              targetPath: '$(terraformWorkingDirectory)/prod.tfplan'
+              artifact: 'prod-tfplan'
+              publishLocation: 'pipeline'
+
+  # ============================================
+  # Stage 5: Apply Prod
+  # Runs on MAIN branch only
+  # Uses 'Production' environment for approval gate
+  # Configure approval: Project Settings → Environments →
+  #   Production → Approvals and checks → Add → Approvals
+  # ============================================
+  - stage: ApplyProd
+    displayName: Apply Prod
+    dependsOn: PlanProd
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: ApplyProd
+        displayName: Terraform Apply (Prod)
+        pool:
+          name: 'NGC_Self-Hosted'
+        environment: 'Production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: DownloadPipelineArtifact@2
+                  displayName: 'Download Prod Plan'
+                  inputs:
+                    buildType: 'current'
+                    artifactName: 'prod-tfplan'
+                    targetPath: '$(terraformWorkingDirectory)'
+
+                - task: TerraformInstaller@1
+                  displayName: 'Install Terraform $(terraformVersion)'
+                  inputs:
+                    terraformVersion: '$(terraformVersion)'
+
+                - task: TerraformTaskV4@4
+                  displayName: 'Terraform Init'
+                  inputs:
+                    provider: 'azurerm'
+                    command: 'init'
+                    workingDirectory: '$(terraformWorkingDirectory)'
+                    backendServiceArm: '$(prodAzureSubscription)'
+                    backendAzureRmResourceGroupName: '$(prodResourceGroupName)'
+                    backendAzureRmStorageAccountName: '$(prodBackendStorageAccount)'
+                    backendAzureRmContainerName: '$(prodBackendContainerName)'
+                    backendAzureRmKey: '$(prodBackendKey)'
+
+                - task: TerraformTaskV4@4
+                  displayName: 'Terraform Apply'
+                  inputs:
+                    provider: 'azurerm'
+                    command: 'apply'
+                    workingDirectory: '$(terraformWorkingDirectory)'
+                    environmentServiceNameAzureRM: '$(prodAzureSubscription)'
+                    commandOptions: 'prod.tfplan'
