@@ -1,5 +1,6 @@
 # Plan_Deploy_Terraform.yaml
 # Terraform Infrastructure Pipeline — Dev & Prod with approval gate
+# Uses AzureCLI@2 with azureSubscription for authentication
 
 trigger:
   branches:
@@ -58,33 +59,37 @@ stages:
             inputs:
               terraformVersion: '$(terraformVersion)'
 
-          - task: TerraformTaskV4@4
+          - task: AzureCLI@2
             displayName: 'Terraform Init'
             inputs:
-              provider: 'azurerm'
-              command: 'init'
-              workingDirectory: '$(terraformWorkingDirectory)'
-              backendServiceArm: '$(devAzureSubscription)'
-              backendAzureRmResourceGroupName: '$(devResourceGroupName)'
-              backendAzureRmStorageAccountName: '$(devBackendStorageAccount)'
-              backendAzureRmContainerName: '$(devBackendContainerName)'
-              backendAzureRmKey: '$(devBackendKey)'
+              azureSubscription: '$(devAzureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                export ARM_USE_CLI=true
+                terraform -chdir=$(terraformWorkingDirectory) init \
+                  -backend-config="resource_group_name=$(devResourceGroupName)" \
+                  -backend-config="storage_account_name=$(devBackendStorageAccount)" \
+                  -backend-config="container_name=$(devBackendContainerName)" \
+                  -backend-config="key=$(devBackendKey)"
 
-          - task: TerraformTaskV4@4
+          - task: AzureCLI@2
             displayName: 'Terraform Validate'
             inputs:
-              provider: 'azurerm'
-              command: 'validate'
-              workingDirectory: '$(terraformWorkingDirectory)'
+              azureSubscription: '$(devAzureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                terraform -chdir=$(terraformWorkingDirectory) validate
 
-          - task: TerraformTaskV4@4
+          - task: AzureCLI@2
             displayName: 'Terraform Format Check'
             inputs:
-              provider: 'azurerm'
-              command: 'custom'
-              workingDirectory: '$(terraformWorkingDirectory)'
-              customCommand: 'fmt'
-              commandOptions: '-check -recursive'
+              azureSubscription: '$(devAzureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                terraform -chdir=$(terraformWorkingDirectory) fmt -check -recursive
 
   # ============================================
   # Stage 2: Plan Dev
@@ -104,26 +109,31 @@ stages:
             inputs:
               terraformVersion: '$(terraformVersion)'
 
-          - task: TerraformTaskV4@4
+          - task: AzureCLI@2
             displayName: 'Terraform Init'
             inputs:
-              provider: 'azurerm'
-              command: 'init'
-              workingDirectory: '$(terraformWorkingDirectory)'
-              backendServiceArm: '$(devAzureSubscription)'
-              backendAzureRmResourceGroupName: '$(devResourceGroupName)'
-              backendAzureRmStorageAccountName: '$(devBackendStorageAccount)'
-              backendAzureRmContainerName: '$(devBackendContainerName)'
-              backendAzureRmKey: '$(devBackendKey)'
+              azureSubscription: '$(devAzureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                export ARM_USE_CLI=true
+                terraform -chdir=$(terraformWorkingDirectory) init \
+                  -backend-config="resource_group_name=$(devResourceGroupName)" \
+                  -backend-config="storage_account_name=$(devBackendStorageAccount)" \
+                  -backend-config="container_name=$(devBackendContainerName)" \
+                  -backend-config="key=$(devBackendKey)"
 
-          - task: TerraformTaskV4@4
+          - task: AzureCLI@2
             displayName: 'Terraform Plan'
             inputs:
-              provider: 'azurerm'
-              command: 'plan'
-              workingDirectory: '$(terraformWorkingDirectory)'
-              environmentServiceNameAzureRM: '$(devAzureSubscription)'
-              commandOptions: '-var-file=environments/dev.tfvars -out=dev.tfplan'
+              azureSubscription: '$(devAzureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                export ARM_USE_CLI=true
+                terraform -chdir=$(terraformWorkingDirectory) plan \
+                  -var-file=environments/dev.tfvars \
+                  -out=dev.tfplan
 
           - task: PublishPipelineArtifact@1
             displayName: 'Publish Dev Plan'
@@ -164,26 +174,29 @@ stages:
                   inputs:
                     terraformVersion: '$(terraformVersion)'
 
-                - task: TerraformTaskV4@4
+                - task: AzureCLI@2
                   displayName: 'Terraform Init'
                   inputs:
-                    provider: 'azurerm'
-                    command: 'init'
-                    workingDirectory: '$(terraformWorkingDirectory)'
-                    backendServiceArm: '$(devAzureSubscription)'
-                    backendAzureRmResourceGroupName: '$(devResourceGroupName)'
-                    backendAzureRmStorageAccountName: '$(devBackendStorageAccount)'
-                    backendAzureRmContainerName: '$(devBackendContainerName)'
-                    backendAzureRmKey: '$(devBackendKey)'
+                    azureSubscription: '$(devAzureSubscription)'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      export ARM_USE_CLI=true
+                      terraform -chdir=$(terraformWorkingDirectory) init \
+                        -backend-config="resource_group_name=$(devResourceGroupName)" \
+                        -backend-config="storage_account_name=$(devBackendStorageAccount)" \
+                        -backend-config="container_name=$(devBackendContainerName)" \
+                        -backend-config="key=$(devBackendKey)"
 
-                - task: TerraformTaskV4@4
+                - task: AzureCLI@2
                   displayName: 'Terraform Apply'
                   inputs:
-                    provider: 'azurerm'
-                    command: 'apply'
-                    workingDirectory: '$(terraformWorkingDirectory)'
-                    environmentServiceNameAzureRM: '$(devAzureSubscription)'
-                    commandOptions: 'dev.tfplan'
+                    azureSubscription: '$(devAzureSubscription)'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      export ARM_USE_CLI=true
+                      terraform -chdir=$(terraformWorkingDirectory) apply dev.tfplan
 
   # ============================================
   # Stage 4: Plan Prod
@@ -204,26 +217,31 @@ stages:
             inputs:
               terraformVersion: '$(terraformVersion)'
 
-          - task: TerraformTaskV4@4
+          - task: AzureCLI@2
             displayName: 'Terraform Init'
             inputs:
-              provider: 'azurerm'
-              command: 'init'
-              workingDirectory: '$(terraformWorkingDirectory)'
-              backendServiceArm: '$(prodAzureSubscription)'
-              backendAzureRmResourceGroupName: '$(prodResourceGroupName)'
-              backendAzureRmStorageAccountName: '$(prodBackendStorageAccount)'
-              backendAzureRmContainerName: '$(prodBackendContainerName)'
-              backendAzureRmKey: '$(prodBackendKey)'
+              azureSubscription: '$(prodAzureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                export ARM_USE_CLI=true
+                terraform -chdir=$(terraformWorkingDirectory) init \
+                  -backend-config="resource_group_name=$(prodResourceGroupName)" \
+                  -backend-config="storage_account_name=$(prodBackendStorageAccount)" \
+                  -backend-config="container_name=$(prodBackendContainerName)" \
+                  -backend-config="key=$(prodBackendKey)"
 
-          - task: TerraformTaskV4@4
+          - task: AzureCLI@2
             displayName: 'Terraform Plan'
             inputs:
-              provider: 'azurerm'
-              command: 'plan'
-              workingDirectory: '$(terraformWorkingDirectory)'
-              environmentServiceNameAzureRM: '$(prodAzureSubscription)'
-              commandOptions: '-var-file=environments/prod.tfvars -out=prod.tfplan'
+              azureSubscription: '$(prodAzureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                export ARM_USE_CLI=true
+                terraform -chdir=$(terraformWorkingDirectory) plan \
+                  -var-file=environments/prod.tfvars \
+                  -out=prod.tfplan
 
           - task: PublishPipelineArtifact@1
             displayName: 'Publish Prod Plan'
@@ -267,23 +285,26 @@ stages:
                   inputs:
                     terraformVersion: '$(terraformVersion)'
 
-                - task: TerraformTaskV4@4
+                - task: AzureCLI@2
                   displayName: 'Terraform Init'
                   inputs:
-                    provider: 'azurerm'
-                    command: 'init'
-                    workingDirectory: '$(terraformWorkingDirectory)'
-                    backendServiceArm: '$(prodAzureSubscription)'
-                    backendAzureRmResourceGroupName: '$(prodResourceGroupName)'
-                    backendAzureRmStorageAccountName: '$(prodBackendStorageAccount)'
-                    backendAzureRmContainerName: '$(prodBackendContainerName)'
-                    backendAzureRmKey: '$(prodBackendKey)'
+                    azureSubscription: '$(prodAzureSubscription)'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      export ARM_USE_CLI=true
+                      terraform -chdir=$(terraformWorkingDirectory) init \
+                        -backend-config="resource_group_name=$(prodResourceGroupName)" \
+                        -backend-config="storage_account_name=$(prodBackendStorageAccount)" \
+                        -backend-config="container_name=$(prodBackendContainerName)" \
+                        -backend-config="key=$(prodBackendKey)"
 
-                - task: TerraformTaskV4@4
+                - task: AzureCLI@2
                   displayName: 'Terraform Apply'
                   inputs:
-                    provider: 'azurerm'
-                    command: 'apply'
-                    workingDirectory: '$(terraformWorkingDirectory)'
-                    environmentServiceNameAzureRM: '$(prodAzureSubscription)'
-                    commandOptions: 'prod.tfplan'
+                    azureSubscription: '$(prodAzureSubscription)'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      export ARM_USE_CLI=true
+                      terraform -chdir=$(terraformWorkingDirectory) apply prod.tfplan
