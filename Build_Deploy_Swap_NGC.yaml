@@ -52,55 +52,75 @@ stages:
         timeoutInMinutes: 0
         pool:
           name: 'NGC Self-Hosted'
+        workspace:
+          clean: all
         steps:
-          - task: NuGetCommand@2
-            displayName: 'Nuget v2 Restore'
-            inputs:
-              command: restore
-              restoreSolution: '**/*.sln'
-
-          - task: VSBuild@1
-            displayName: 'Build solution'
-            inputs:
-              solution: '**/*.sln'
-              msbuildArgs: '/p:DeployOnBuild=true /p:DeployDefaultTarget=WebPublish /p:WebPublishMethod=FileSystem /p:DeleteExistingFiles=True /p:publishUrl="$(Build.ArtifactStagingDirectory)\\WebAppContent"'
-              platform: 'Any CPU'
-              configuration: '$(buildConfiguration)'
-
+          # ── Lightweight dummy build (for testing pipeline flow) ──
           - task: PowerShell@2
-            displayName: 'Inject Build Number'
+            displayName: 'Create dummy artifact'
             inputs:
               targetType: 'inline'
               script: |
-                $version = "4.5.$(Build.BuildId)"
-
-                # Update web.config for ASP.NET pages
-                $webConfigPath = "$(Build.ArtifactStagingDirectory)\\WebAppContent\\Master\\Web.config"
-                if (Test-Path $webConfigPath) {
-                    $xml = [xml](Get-Content $webConfigPath)
-                    $appVersionNode = $xml.configuration.appSettings.add | Where-Object { $_.key -eq 'AppVersion' }
-                    if ($appVersionNode) {
-                        $appVersionNode.value = $version
-                        $xml.Save($webConfigPath)
-                        Write-Host "Web.config updated: $version"
-                    }
-                }
-
-          - task: ArchiveFiles@2
-            displayName: 'Archive build output'
-            inputs:
-              rootFolderOrFile: '$(Build.ArtifactStagingDirectory)\\WebAppContent'
-              includeRootFolder: false
-              archiveType: 'zip'
-              archiveFile: '$(Build.ArtifactStagingDirectory)/ResQ4_5.zip'
-              replaceExistingArchive: true
+                $outDir = "$(Build.ArtifactStagingDirectory)"
+                $html = "<html><body><h1>Pipeline test - Build $(Build.BuildId)</h1></body></html>"
+                $html | Out-File "$outDir\index.html" -Encoding utf8
+                Compress-Archive -Path "$outDir\index.html" -DestinationPath "$outDir\ResQ4_5.zip" -Force
+                Write-Host "Created dummy ResQ4_5.zip"
 
           - task: PublishPipelineArtifact@1
             displayName: 'Publish artifact'
             inputs:
-              targetPath: '$(Pipeline.Workspace)'
+              targetPath: '$(Build.ArtifactStagingDirectory)/ResQ4_5.zip'
               artifact: 'drop'
               publishLocation: 'pipeline'
+
+          # ── Real .NET build (commented out — uncomment when pipeline flow is verified) ──
+          # - task: NuGetCommand@2
+          #   displayName: 'Nuget v2 Restore'
+          #   inputs:
+          #     command: restore
+          #     restoreSolution: '**/*.sln'
+          #
+          # - task: VSBuild@1
+          #   displayName: 'Build solution'
+          #   inputs:
+          #     solution: '**/*.sln'
+          #     msbuildArgs: '/p:DeployOnBuild=true /p:DeployDefaultTarget=WebPublish /p:WebPublishMethod=FileSystem /p:DeleteExistingFiles=True /p:publishUrl="$(Build.ArtifactStagingDirectory)\\WebAppContent"'
+          #     platform: 'Any CPU'
+          #     configuration: '$(buildConfiguration)'
+          #
+          # - task: PowerShell@2
+          #   displayName: 'Inject Build Number'
+          #   inputs:
+          #     targetType: 'inline'
+          #     script: |
+          #       $version = "4.5.$(Build.BuildId)"
+          #       $webConfigPath = "$(Build.ArtifactStagingDirectory)\\WebAppContent\\Master\\Web.config"
+          #       if (Test-Path $webConfigPath) {
+          #           $xml = [xml](Get-Content $webConfigPath)
+          #           $appVersionNode = $xml.configuration.appSettings.add | Where-Object { $_.key -eq 'AppVersion' }
+          #           if ($appVersionNode) {
+          #               $appVersionNode.value = $version
+          #               $xml.Save($webConfigPath)
+          #               Write-Host "Web.config updated: $version"
+          #           }
+          #       }
+          #
+          # - task: ArchiveFiles@2
+          #   displayName: 'Archive build output'
+          #   inputs:
+          #     rootFolderOrFile: '$(Build.ArtifactStagingDirectory)\\WebAppContent'
+          #     includeRootFolder: false
+          #     archiveType: 'zip'
+          #     archiveFile: '$(Build.ArtifactStagingDirectory)/ResQ4_5.zip'
+          #     replaceExistingArchive: true
+          #
+          # - task: PublishPipelineArtifact@1
+          #   displayName: 'Publish artifact'
+          #   inputs:
+          #     targetPath: '$(Build.ArtifactStagingDirectory)/ResQ4_5.zip'
+          #     artifact: 'drop'
+          #     publishLocation: 'pipeline'
 
   # ============================================
   # Stage 2: Deploy to DEV
@@ -121,13 +141,6 @@ stages:
           runOnce:
             deploy:
               steps:
-                - task: DownloadPipelineArtifact@2
-                  displayName: 'Download artifact'
-                  inputs:
-                    buildType: 'current'
-                    artifactName: 'drop'
-                    targetPath: '$(Pipeline.Workspace)'
-
                 - task: AzureRmWebAppDeployment@4
                   displayName: 'Deploy to Dev App Service'
                   inputs:
@@ -138,7 +151,7 @@ stages:
                     deployToSlotOrASE: true
                     WebAppName: '$(devAppName)'
                     SlotName: '$(devSlotName)'
-                    packageForLinux: '$(Pipeline.Workspace)/**/*.zip'
+                    packageForLinux: '$(Pipeline.Workspace)/drop/ResQ4_5.zip'
                     enableCustomDeployment: true
                     DeploymentType: 'zipDeploy'
                     TakeAppOfflineFlag: false
@@ -188,13 +201,6 @@ stages:
           runOnce:
             deploy:
               steps:
-                - task: DownloadPipelineArtifact@2
-                  displayName: 'Download artifact'
-                  inputs:
-                    buildType: 'current'
-                    artifactName: 'drop'
-                    targetPath: '$(Pipeline.Workspace)'
-
                 - task: AzureRmWebAppDeployment@4
                   displayName: 'Deploy to Prod App Service'
                   inputs:
@@ -205,7 +211,7 @@ stages:
                     deployToSlotOrASE: true
                     WebAppName: '$(prodAppName)'
                     SlotName: '$(prodSlotName)'
-                    packageForLinux: '$(Pipeline.Workspace)/**/*.zip'
+                    packageForLinux: '$(Pipeline.Workspace)/drop/ResQ4_5.zip'
                     enableCustomDeployment: true
                     DeploymentType: 'zipDeploy'
                     TakeAppOfflineFlag: false
