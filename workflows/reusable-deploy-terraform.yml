@@ -1,0 +1,114 @@
+# Reusable workflow: Deploy infrastructure via Terraform
+#
+# Runs terraform init → plan → apply for a given environment.
+# Uses OIDC to assume an IAM role — no long-lived credentials.
+#
+# The plan is saved as an artifact so the apply step uses the exact
+# same changes that were reviewed.
+
+name: Deploy Terraform
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment name (dev, qa, prod)"
+        required: true
+        type: string
+      aws-role-arn:
+        description: "IAM role ARN for OIDC assume-role"
+        required: true
+        type: string
+      aws-region:
+        description: "AWS region"
+        required: true
+        type: string
+      terraform-version:
+        description: "Terraform version to install"
+        required: false
+        type: string
+        default: "1.9.8"
+      working-directory:
+        description: "Path to the Terraform root module"
+        required: false
+        type: string
+        default: "aws-digital-collector-reimagine"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  plan:
+    name: Plan (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}-plan
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform-version }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Terraform Init
+        working-directory: ${{ inputs.working-directory }}
+        run: terraform init -backend-config=environments/${{ inputs.environment }}/backend.hcl
+
+      - name: Terraform Validate
+        working-directory: ${{ inputs.working-directory }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: ${{ inputs.working-directory }}
+        run: terraform plan -var-file=environments/${{ inputs.environment }}/terraform.tfvars -out=tfplan
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ inputs.environment }}
+          path: ${{ inputs.working-directory }}/tfplan
+          retention-days: 5
+
+  apply:
+    name: Apply (${{ inputs.environment }})
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform-version }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Terraform Init
+        working-directory: ${{ inputs.working-directory }}
+        run: terraform init -backend-config=environments/${{ inputs.environment }}/backend.hcl
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ inputs.environment }}
+          path: ${{ inputs.working-directory }}
+
+      - name: Terraform Apply
+        working-directory: ${{ inputs.working-directory }}
+        run: terraform apply tfplan
