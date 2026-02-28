@@ -1,20 +1,38 @@
-name: Build and Deploy Outbound Calling App
+# CI/CD pipeline for the outbound-calling-app
+#
+# Build once, then deploy to dev → qa → prod via Amazon ECS.
+# Dev deploys automatically on push to main; QA and Prod require
+# manual approval via GitHub Environment protection rules.
+#
+# GitHub Environment Setup (manual):
+#   Settings → Environments → Create "qa"  → Add required reviewers
+#   Settings → Environments → Create "prod" → Add required reviewers
+#
+# To enable deployments:
+#   1. Fill in the TODO placeholders below with your AWS values
+#   2. Uncomment the deploy-dev, deploy-qa, and deploy-prod jobs
+#   3. Push to main
+
+name: Deploy Outbound Calling App
 
 on:
   push:
     branches: [main]
     paths:
-      - 'outbound-calling-app/**'
-      - '.github/workflows/deploy-outbound-calling-app.yml'
+      - "outbound-calling-app/**"
   workflow_dispatch:
 
+# TODO: Replace these placeholder values with your actual AWS configuration
 env:
-  AWS_REGION: us-east-1
-  ECR_REPOSITORY: outbound-calling-app
-  ECS_CLUSTER: PLACEHOLDER_CLUSTER_NAME        # TODO: replace with your ECS cluster name
-  ECS_SERVICE: PLACEHOLDER_SERVICE_NAME         # TODO: replace with your ECS service name
-  TASK_DEFINITION_FAMILY: PLACEHOLDER_TASK_DEF  # TODO: replace with your task definition family
-  CONTAINER_NAME: outbound-calling-app          # must match the container name in the task definition
+  AWS_REGION: us-east-1 # TODO: your AWS region
+  ECR_REPOSITORY: outbound-calling-app # TODO: your ECR repository name
+  ECS_CLUSTER: my-cluster # TODO: your ECS cluster name
+  ECS_SERVICE: outbound-calling-app # TODO: your ECS service name
+  TASK_DEFINITION_FAMILY: outbound-calling-app # TODO: your task definition family
+  CONTAINER_NAME: outbound-calling-app # TODO: container name in task definition
+  AWS_ROLE_ARN_DEV: arn:aws:iam::123456789012:role/github-actions-dev # TODO: dev IAM role ARN
+  AWS_ROLE_ARN_QA: arn:aws:iam::123456789012:role/github-actions-qa # TODO: qa IAM role ARN
+  AWS_ROLE_ARN_PROD: arn:aws:iam::123456789012:role/github-actions-prod # TODO: prod IAM role ARN
 
 permissions:
   id-token: write
@@ -22,76 +40,73 @@ permissions:
 
 jobs:
   build:
-    name: Build Docker Image
+    name: Build
     runs-on: ubuntu-latest
     outputs:
-      image_tag: ${{ steps.meta.outputs.tag }}
+      image-tag: ${{ steps.set-tag.outputs.image-tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set image tag
-        id: meta
-        run: echo "tag=$(echo $GITHUB_SHA | cut -c1-7)" >> "$GITHUB_OUTPUT"
+        id: set-tag
+        run: echo "image-tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
-      - name: Build Docker image
-        working-directory: outbound-calling-app
-        run: |
-          docker build -t ${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.tag }} .
-          docker tag ${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.tag }} ${{ env.ECR_REPOSITORY }}:latest
-          echo "Build successful: ${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.tag }}"
+      - name: Build Docker image (validation only)
+        run: docker build -t outbound-calling-app:${{ steps.set-tag.outputs.image-tag }} ./outbound-calling-app
 
-  # ============================================================
-  # Uncomment the job below once AWS credentials are configured
-  # ============================================================
-  # deploy:
-  #   name: Push to ECR and Deploy to ECS
-  #   runs-on: ubuntu-latest
+  # ---------------------------------------------------------------
+  # Uncomment the jobs below when AWS credentials are configured.
+  # ---------------------------------------------------------------
+
+  # deploy-dev:
+  #   name: Deploy to Dev
   #   needs: build
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #
-  #     - name: Configure AWS credentials (OIDC)
-  #       uses: aws-actions/configure-aws-credentials@v4
-  #       with:
-  #         role-to-assume: arn:aws:iam::PLACEHOLDER_ACCOUNT_ID:role/PLACEHOLDER_ROLE_NAME  # TODO: replace
-  #         aws-region: ${{ env.AWS_REGION }}
-  #
-  #     - name: Login to Amazon ECR
-  #       id: login-ecr
-  #       uses: aws-actions/amazon-ecr-login@v2
-  #
-  #     - name: Build, tag, and push image to ECR
-  #       id: build-image
-  #       working-directory: outbound-calling-app
-  #       env:
-  #         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-  #         IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
-  #       run: |
-  #         docker build -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG .
-  #         docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
-  #         echo "image=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
-  #
-  #     - name: Download current task definition
-  #       run: |
-  #         aws ecs describe-task-definition \
-  #           --task-definition ${{ env.TASK_DEFINITION_FAMILY }} \
-  #           --query taskDefinition \
-  #           > task-definition.json
-  #
-  #     - name: Update task definition with new image
-  #       id: task-def
-  #       uses: aws-actions/amazon-ecs-render-task-definition@v1
-  #       with:
-  #         task-definition: task-definition.json
-  #         container-name: ${{ env.CONTAINER_NAME }}
-  #         image: ${{ steps.build-image.outputs.image }}
-  #
-  #     - name: Deploy to Amazon ECS
-  #       uses: aws-actions/amazon-ecs-deploy-task-definition@v2
-  #       with:
-  #         task-definition: ${{ steps.task-def.outputs.task-definition }}
-  #         service: ${{ env.ECS_SERVICE }}
-  #         cluster: ${{ env.ECS_CLUSTER }}
-  #         wait-for-service-stability: true
+  #   uses: ./.github/workflows/reusable-deploy-ecs.yml
+  #   with:
+  #     environment: dev
+  #     aws-role-arn: ${{ env.AWS_ROLE_ARN_DEV }}  # NOTE: see workaround below
+  #     aws-region: us-east-1  # TODO: your AWS region
+  #     ecr-repository: outbound-calling-app  # TODO: your ECR repository name
+  #     image-tag: ${{ needs.build.outputs.image-tag }}
+  #     ecs-cluster: my-cluster  # TODO: your ECS cluster name
+  #     ecs-service: outbound-calling-app  # TODO: your ECS service name
+  #     task-definition-family: outbound-calling-app  # TODO: your task definition family
+  #     container-name: outbound-calling-app  # TODO: container name in task definition
+
+  # deploy-qa:
+  #   name: Deploy to QA
+  #   needs: deploy-dev
+  #   uses: ./.github/workflows/reusable-deploy-ecs.yml
+  #   with:
+  #     environment: qa
+  #     aws-role-arn: ${{ env.AWS_ROLE_ARN_QA }}  # NOTE: see workaround below
+  #     aws-region: us-east-1  # TODO: your AWS region
+  #     ecr-repository: outbound-calling-app  # TODO: your ECR repository name
+  #     image-tag: ${{ needs.build.outputs.image-tag }}
+  #     ecs-cluster: my-cluster  # TODO: your ECS cluster name
+  #     ecs-service: outbound-calling-app  # TODO: your ECS service name
+  #     task-definition-family: outbound-calling-app  # TODO: your task definition family
+  #     container-name: outbound-calling-app  # TODO: container name in task definition
+
+  # deploy-prod:
+  #   name: Deploy to Prod
+  #   needs: deploy-qa
+  #   uses: ./.github/workflows/reusable-deploy-ecs.yml
+  #   with:
+  #     environment: prod
+  #     aws-role-arn: ${{ env.AWS_ROLE_ARN_PROD }}  # NOTE: see workaround below
+  #     aws-region: us-east-1  # TODO: your AWS region
+  #     ecr-repository: outbound-calling-app  # TODO: your ECR repository name
+  #     image-tag: ${{ needs.build.outputs.image-tag }}
+  #     ecs-cluster: my-cluster  # TODO: your ECS cluster name
+  #     ecs-service: outbound-calling-app  # TODO: your ECS service name
+  #     task-definition-family: outbound-calling-app  # TODO: your task definition family
+  #     container-name: outbound-calling-app  # TODO: container name in task definition
+
+  # NOTE: `env.*` context is not available in `with:` blocks for reusable
+  # workflow calls. When uncommenting, replace the ${{ env.* }} references
+  # with either:
+  #   - Hard-coded values directly in the `with:` block, OR
+  #   - GitHub Actions variables: ${{ vars.AWS_ROLE_ARN_DEV }}, etc.
+  #     (Settings → Secrets and variables → Actions → Variables)

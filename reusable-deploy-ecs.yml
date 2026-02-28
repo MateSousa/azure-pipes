@@ -1,0 +1,106 @@
+# Reusable workflow: Deploy a Docker image to an ECS service
+#
+# This workflow builds and pushes a Docker image to ECR, then updates
+# the ECS task definition and deploys it to the specified service.
+#
+# The build+push is inside this reusable workflow because GitHub Actions
+# artifacts can't easily share Docker images across jobs. The image tag
+# stays the same across all environments, and ECR layer caching means
+# the second/third push is near-instant.
+
+name: Deploy to ECS
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment name (dev, qa, prod)"
+        required: true
+        type: string
+      aws-role-arn:
+        description: "IAM role ARN for OIDC assume-role"
+        required: true
+        type: string
+      aws-region:
+        description: "AWS region"
+        required: true
+        type: string
+      ecr-repository:
+        description: "ECR repository name"
+        required: true
+        type: string
+      image-tag:
+        description: "Docker image tag (from build job)"
+        required: true
+        type: string
+      ecs-cluster:
+        description: "ECS cluster name"
+        required: true
+        type: string
+      ecs-service:
+        description: "ECS service name"
+        required: true
+        type: string
+      task-definition-family:
+        description: "Task definition family name"
+        required: true
+        type: string
+      container-name:
+        description: "Container name in the task definition"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          ECR_REPOSITORY: ${{ inputs.ecr-repository }}
+          IMAGE_TAG: ${{ inputs.image-tag }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./outbound-calling-app
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ inputs.task-definition-family }} \
+            --query taskDefinition \
+            --output json > task-definition.json
+
+      - name: Render new image into task definition
+        id: render-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ inputs.container-name }}
+          image: ${{ steps.ecr-login.outputs.registry }}/${{ inputs.ecr-repository }}:${{ inputs.image-tag }}
+
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-task-def.outputs.task-definition }}
+          service: ${{ inputs.ecs-service }}
+          cluster: ${{ inputs.ecs-cluster }}
+          wait-for-service-stability: true

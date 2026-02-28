@@ -21,23 +21,23 @@ variables:
 
   # ── Dev environment ──
   - name: devResourceGroupName
-    value: 'PZI_GXUS_N_RGP_LGLWK_DE01'
+    value: 'PZI-GXUS-N-RGP-LGUWK-D001'
   - name: devAppName
-    value: 'u2iguukadwa0009'
+    value: 'app-service-01'
   - name: devAzureSubscription
     value: 'NGC-Dev-ResQ'
   - name: devSlotName
-    value: 'resq4-deploy'
+    value: 'app-service-01-deploy'
 
   # ── Prod environment ──
   - name: prodResourceGroupName
-    value: 'PZI_GXUS_P_RGP_LGLWK_PR03'
+    value: 'PZI_GXUS_P_RGP_LGLWK_PR03-sasa'
   - name: prodAppName
-    value: 'u2iguukadwa0008'
+    value: 'u2iguukadwa0008-sasasa'
   - name: prodAzureSubscription
     value: 'NGC-Prod-ResQ'
   - name: prodSlotName
-    value: 'resq-webapp2-prod'
+    value: 'resq-webapp2-prod-sasasa'
 
 stages:
   # ============================================
