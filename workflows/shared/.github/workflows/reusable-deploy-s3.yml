@@ -1,0 +1,96 @@
+# Reusable workflow: Build frontend and deploy to S3 + invalidate CloudFront
+#
+# Usage from application repos:
+#   uses: your-org/shared-workflows/.github/workflows/reusable-deploy-s3.yml@main
+
+name: Deploy to S3
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment name (dev, qa, prod)"
+        required: true
+        type: string
+      aws-role-arn:
+        description: "IAM role ARN for OIDC assume-role"
+        required: true
+        type: string
+      aws-region:
+        description: "AWS region"
+        required: true
+        type: string
+      node-version:
+        description: "Node.js version"
+        required: false
+        type: string
+        default: "20"
+      working-directory:
+        description: "Path to the frontend app"
+        required: false
+        type: string
+        default: "."
+      build-command:
+        description: "Build command"
+        required: false
+        type: string
+        default: "npm run build"
+      dist-path:
+        description: "Path to built files (relative to working-directory)"
+        required: false
+        type: string
+        default: "dist"
+      s3-bucket:
+        description: "S3 bucket name"
+        required: true
+        type: string
+      cloudfront-distribution-id:
+        description: "CloudFront distribution ID for cache invalidation"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: npm ci
+
+      - name: Build
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.build-command }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Sync to S3
+        working-directory: ${{ inputs.working-directory }}
+        run: aws s3 sync ${{ inputs.dist-path }} s3://${{ inputs.s3-bucket }} --delete
+
+      - name: Invalidate CloudFront cache
+        if: inputs.cloudfront-distribution-id != ''
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ inputs.cloudfront-distribution-id }} \
+            --paths "/*"

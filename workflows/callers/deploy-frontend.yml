@@ -1,0 +1,52 @@
+# Caller workflow: Deploy FrontEnd to S3 + CloudFront
+# Place this in the FrontEnd application repo at .github/workflows/deploy.yml
+
+name: Deploy FrontEnd
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-dev:
+    name: Deploy to Dev
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-s3.yml@main
+    with:
+      environment: dev
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_DEV }}
+      aws-region: us-east-1
+      node-version: "20"
+      working-directory: "."
+      s3-bucket: app-rcms-caia-frontend-dev
+      cloudfront-distribution-id: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+
+  deploy-qa:
+    name: Deploy to QA
+    needs: deploy-dev
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-s3.yml@main
+    with:
+      environment: qa
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_QA }}
+      aws-region: us-east-1
+      node-version: "20"
+      working-directory: "."
+      s3-bucket: app-rcms-caia-frontend-qa
+      cloudfront-distribution-id: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID_QA }}
+
+  deploy-prod:
+    name: Deploy to Prod
+    needs: deploy-qa
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-s3.yml@main
+    with:
+      environment: prod
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_PROD }}
+      aws-region: us-east-1
+      node-version: "20"
+      working-directory: "."
+      s3-bucket: app-rcms-caia-frontend-prod
+      cloudfront-distribution-id: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID_PROD }}

@@ -1,0 +1,67 @@
+# Caller workflow: Deploy VirtualAgent ECS scheduled task
+# Place this in the VirtualAgent application repo at .github/workflows/deploy.yml
+
+name: Deploy VirtualAgent
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.set-tag.outputs.image-tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set image tag
+        id: set-tag
+        run: echo "image-tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+  deploy-dev:
+    name: Deploy to Dev
+    needs: build
+    uses: your-org/shared-workflows/.github/workflows/reusable-run-ecs-task.yml@main
+    with:
+      environment: dev
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_DEV }}
+      aws-region: us-east-1
+      ecr-repository: app-rcms-caia-virtualagent
+      image-tag: ${{ needs.build.outputs.image-tag }}
+      docker-context: "."
+      task-definition-family: app-rcms-caia-virtualagent
+      container-name: virtualagent
+
+  deploy-qa:
+    name: Deploy to QA
+    needs: deploy-dev
+    uses: your-org/shared-workflows/.github/workflows/reusable-run-ecs-task.yml@main
+    with:
+      environment: qa
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_QA }}
+      aws-region: us-east-1
+      ecr-repository: app-rcms-caia-virtualagent
+      image-tag: ${{ needs.build.outputs.image-tag }}
+      docker-context: "."
+      task-definition-family: app-rcms-caia-virtualagent
+      container-name: virtualagent
+
+  deploy-prod:
+    name: Deploy to Prod
+    needs: deploy-qa
+    uses: your-org/shared-workflows/.github/workflows/reusable-run-ecs-task.yml@main
+    with:
+      environment: prod
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_PROD }}
+      aws-region: us-east-1
+      ecr-repository: app-rcms-caia-virtualagent
+      image-tag: ${{ needs.build.outputs.image-tag }}
+      docker-context: "."
+      task-definition-family: app-rcms-caia-virtualagent
+      container-name: virtualagent
