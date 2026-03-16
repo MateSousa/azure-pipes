@@ -1,0 +1,274 @@
+# Caller workflow: Deploy Connect Lambda functions
+# Place this in the application repo at .github/workflows/deploy-lambda.yml
+#
+# Lambda functions deployed:
+#   - collectorbotlambda_noagents (Python)
+#   - DTMFAudioRetriever (Node.js)
+#   - dynamic-navigator-fulfillment (Node.js)
+#   - extract_call_status (Python)
+#   - extract_data (Python)
+
+name: Deploy Lambda Functions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "AWSConsole/Connect/Lambda/**"
+  workflow_dispatch:
+    inputs:
+      function:
+        description: "Lambda function to deploy (or 'all')"
+        required: true
+        type: choice
+        options:
+          - all
+          - collectorbotlambda_noagents
+          - DTMFAudioRetriever
+          - dynamic-navigator-fulfillment
+          - extract_call_status
+          - extract_data
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - qa
+          - prod
+        default: dev
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ---------- Detect which functions changed ----------
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    outputs:
+      collectorbotlambda_noagents: ${{ steps.filter.outputs.collectorbotlambda_noagents }}
+      DTMFAudioRetriever: ${{ steps.filter.outputs.DTMFAudioRetriever }}
+      dynamic-navigator-fulfillment: ${{ steps.filter.outputs.dynamic-navigator-fulfillment }}
+      extract_call_status: ${{ steps.filter.outputs.extract_call_status }}
+      extract_data: ${{ steps.filter.outputs.extract_data }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            collectorbotlambda_noagents:
+              - 'AWSConsole/Connect/Lambda/collectorbotlambda_noagents/src/**'
+            DTMFAudioRetriever:
+              - 'AWSConsole/Connect/Lambda/DTMFAudioRetriever/src/**'
+            dynamic-navigator-fulfillment:
+              - 'AWSConsole/Connect/Lambda/dynamic-navigator-fulfillment/src/**'
+            extract_call_status:
+              - 'AWSConsole/Connect/Lambda/extract_call_status/src/**'
+            extract_data:
+              - 'AWSConsole/Connect/Lambda/extract_data/src/**'
+
+  # ---------- collectorbotlambda_noagents (Python) ----------
+  deploy-collectorbotlambda-noagents-dev:
+    name: collectorbotlambda_noagents → Dev
+    needs: [changes]
+    if: |
+      (github.event_name == 'push' && needs.changes.outputs.collectorbotlambda_noagents == 'true') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.function == 'all' || inputs.function == 'collectorbotlambda_noagents') && inputs.environment == 'dev')
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lambda.yml@main
+    with:
+      environment: dev
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_DEV }}
+      aws-region: us-east-1
+      function-name: collectorbotlambda_noagents
+      source-path: AWSConsole/Connect/Lambda/collectorbotlambda_noagents/src
+      runtime: python3.12
+
+  # ---------- DTMFAudioRetriever (Node.js) ----------
+  deploy-dtmf-audio-retriever-dev:
+    name: DTMFAudioRetriever → Dev
+    needs: [changes]
+    if: |
+      (github.event_name == 'push' && needs.changes.outputs.DTMFAudioRetriever == 'true') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.function == 'all' || inputs.function == 'DTMFAudioRetriever') && inputs.environment == 'dev')
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lambda.yml@main
+    with:
+      environment: dev
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_DEV }}
+      aws-region: us-east-1
+      function-name: DTMFAudioRetriever
+      source-path: AWSConsole/Connect/Lambda/DTMFAudioRetriever/src
+      runtime: nodejs20.x
+
+  # ---------- dynamic-navigator-fulfillment (Node.js) ----------
+  deploy-dynamic-navigator-dev:
+    name: dynamic-navigator-fulfillment → Dev
+    needs: [changes]
+    if: |
+      (github.event_name == 'push' && needs.changes.outputs.dynamic-navigator-fulfillment == 'true') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.function == 'all' || inputs.function == 'dynamic-navigator-fulfillment') && inputs.environment == 'dev')
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lambda.yml@main
+    with:
+      environment: dev
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_DEV }}
+      aws-region: us-east-1
+      function-name: dynamic-navigator-fulfillment
+      source-path: AWSConsole/Connect/Lambda/dynamic-navigator-fulfillment/src
+      runtime: nodejs20.x
+
+  # ---------- extract_call_status (Python) ----------
+  deploy-extract-call-status-dev:
+    name: extract_call_status → Dev
+    needs: [changes]
+    if: |
+      (github.event_name == 'push' && needs.changes.outputs.extract_call_status == 'true') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.function == 'all' || inputs.function == 'extract_call_status') && inputs.environment == 'dev')
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lambda.yml@main
+    with:
+      environment: dev
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_DEV }}
+      aws-region: us-east-1
+      function-name: extract_call_status
+      source-path: AWSConsole/Connect/Lambda/extract_call_status/src
+      runtime: python3.12
+
+  # ---------- extract_data (Python) ----------
+  deploy-extract-data-dev:
+    name: extract_data → Dev
+    needs: [changes]
+    if: |
+      (github.event_name == 'push' && needs.changes.outputs.extract_data == 'true') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.function == 'all' || inputs.function == 'extract_data') && inputs.environment == 'dev')
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lambda.yml@main
+    with:
+      environment: dev
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_DEV }}
+      aws-region: us-east-1
+      function-name: extract_data
+      source-path: AWSConsole/Connect/Lambda/extract_data/src
+      runtime: python3.12
+
+  # ========== QA (workflow_dispatch only) ==========
+  deploy-collectorbotlambda-noagents-qa:
+    name: collectorbotlambda_noagents → QA
+    if: github.event_name == 'workflow_dispatch' && (inputs.function == 'all' || inputs.function == 'collectorbotlambda_noagents') && inputs.environment == 'qa'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lambda.yml@main
+    with:
+      environment: qa
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_QA }}
+      aws-region: us-east-1
+      function-name: collectorbotlambda_noagents
+      source-path: AWSConsole/Connect/Lambda/collectorbotlambda_noagents/src
+      runtime: python3.12
+
+  deploy-dtmf-audio-retriever-qa:
+    name: DTMFAudioRetriever → QA
+    if: github.event_name == 'workflow_dispatch' && (inputs.function == 'all' || inputs.function == 'DTMFAudioRetriever') && inputs.environment == 'qa'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lambda.yml@main
+    with:
+      environment: qa
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_QA }}
+      aws-region: us-east-1
+      function-name: DTMFAudioRetriever
+      source-path: AWSConsole/Connect/Lambda/DTMFAudioRetriever/src
+      runtime: nodejs20.x
+
+  deploy-dynamic-navigator-qa:
+    name: dynamic-navigator-fulfillment → QA
+    if: github.event_name == 'workflow_dispatch' && (inputs.function == 'all' || inputs.function == 'dynamic-navigator-fulfillment') && inputs.environment == 'qa'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lambda.yml@main
+    with:
+      environment: qa
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_QA }}
+      aws-region: us-east-1
+      function-name: dynamic-navigator-fulfillment
+      source-path: AWSConsole/Connect/Lambda/dynamic-navigator-fulfillment/src
+      runtime: nodejs20.x
+
+  deploy-extract-call-status-qa:
+    name: extract_call_status → QA
+    if: github.event_name == 'workflow_dispatch' && (inputs.function == 'all' || inputs.function == 'extract_call_status') && inputs.environment == 'qa'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lambda.yml@main
+    with:
+      environment: qa
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_QA }}
+      aws-region: us-east-1
+      function-name: extract_call_status
+      source-path: AWSConsole/Connect/Lambda/extract_call_status/src
+      runtime: python3.12
+
+  deploy-extract-data-qa:
+    name: extract_data → QA
+    if: github.event_name == 'workflow_dispatch' && (inputs.function == 'all' || inputs.function == 'extract_data') && inputs.environment == 'qa'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lambda.yml@main
+    with:
+      environment: qa
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_QA }}
+      aws-region: us-east-1
+      function-name: extract_data
+      source-path: AWSConsole/Connect/Lambda/extract_data/src
+      runtime: python3.12
+
+  # ========== Prod (workflow_dispatch only) ==========
+  deploy-collectorbotlambda-noagents-prod:
+    name: collectorbotlambda_noagents → Prod
+    if: github.event_name == 'workflow_dispatch' && (inputs.function == 'all' || inputs.function == 'collectorbotlambda_noagents') && inputs.environment == 'prod'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lambda.yml@main
+    with:
+      environment: prod
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_PROD }}
+      aws-region: us-east-1
+      function-name: collectorbotlambda_noagents
+      source-path: AWSConsole/Connect/Lambda/collectorbotlambda_noagents/src
+      runtime: python3.12
+
+  deploy-dtmf-audio-retriever-prod:
+    name: DTMFAudioRetriever → Prod
+    if: github.event_name == 'workflow_dispatch' && (inputs.function == 'all' || inputs.function == 'DTMFAudioRetriever') && inputs.environment == 'prod'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lambda.yml@main
+    with:
+      environment: prod
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_PROD }}
+      aws-region: us-east-1
+      function-name: DTMFAudioRetriever
+      source-path: AWSConsole/Connect/Lambda/DTMFAudioRetriever/src
+      runtime: nodejs20.x
+
+  deploy-dynamic-navigator-prod:
+    name: dynamic-navigator-fulfillment → Prod
+    if: github.event_name == 'workflow_dispatch' && (inputs.function == 'all' || inputs.function == 'dynamic-navigator-fulfillment') && inputs.environment == 'prod'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lambda.yml@main
+    with:
+      environment: prod
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_PROD }}
+      aws-region: us-east-1
+      function-name: dynamic-navigator-fulfillment
+      source-path: AWSConsole/Connect/Lambda/dynamic-navigator-fulfillment/src
+      runtime: nodejs20.x
+
+  deploy-extract-call-status-prod:
+    name: extract_call_status → Prod
+    if: github.event_name == 'workflow_dispatch' && (inputs.function == 'all' || inputs.function == 'extract_call_status') && inputs.environment == 'prod'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lambda.yml@main
+    with:
+      environment: prod
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_PROD }}
+      aws-region: us-east-1
+      function-name: extract_call_status
+      source-path: AWSConsole/Connect/Lambda/extract_call_status/src
+      runtime: python3.12
+
+  deploy-extract-data-prod:
+    name: extract_data → Prod
+    if: github.event_name == 'workflow_dispatch' && (inputs.function == 'all' || inputs.function == 'extract_data') && inputs.environment == 'prod'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lambda.yml@main
+    with:
+      environment: prod
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_PROD }}
+      aws-region: us-east-1
+      function-name: extract_data
+      source-path: AWSConsole/Connect/Lambda/extract_data/src
+      runtime: python3.12
