@@ -1,0 +1,164 @@
+# Reusable workflow: Deploy Amazon Lex V2 bots
+#
+# Usage from application repos:
+#   uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lex.yml@main
+
+name: Deploy Lex Bot
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment name (dev, qa, prod)"
+        required: true
+        type: string
+      aws-role-arn:
+        description: "IAM role ARN for OIDC assume-role"
+        required: true
+        type: string
+      aws-region:
+        description: "AWS region"
+        required: true
+        type: string
+      bots:
+        description: >
+          JSON array of Lex bots to deploy.
+          Each entry: {"name": "display name", "bot-id": "BOT_ID", "locale-id": "en_US", "bot-json": "path/to/Bot.json", "locale-json": "path/to/BotLocale.json", "intents-dir": "path/to/Intents"}
+        required: true
+        type: string
+      auto-build:
+        description: "Automatically build the bot locale after updating"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy Lex bots to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Deploy Lex bots
+        env:
+          BOTS: ${{ inputs.bots }}
+          AUTO_BUILD: ${{ inputs.auto-build }}
+          REGION: ${{ inputs.aws-region }}
+        run: |
+          echo "$BOTS" | jq -c '.[]' | while read -r bot; do
+            NAME=$(echo "$bot" | jq -r '.name')
+            BOT_ID=$(echo "$bot" | jq -r '.["bot-id"]')
+            LOCALE_ID=$(echo "$bot" | jq -r '.["locale-id"]')
+            BOT_JSON=$(echo "$bot" | jq -r '.["bot-json"]')
+            LOCALE_JSON=$(echo "$bot" | jq -r '.["locale-json"]')
+            INTENTS_DIR=$(echo "$bot" | jq -r '.["intents-dir"]')
+
+            echo "========================================="
+            echo "Deploying Lex bot: $NAME ($BOT_ID)"
+            echo "========================================="
+
+            # Update bot locale
+            if [ -f "$LOCALE_JSON" ]; then
+              echo "Updating bot locale ($LOCALE_ID)..."
+
+              # Extract locale settings from the JSON
+              DESCRIPTION=$(jq -r '.description // empty' "$LOCALE_JSON")
+              NLU_CONFIDENCE=$(jq -r '.nluIntentConfidenceThreshold // 0.4' "$LOCALE_JSON")
+
+              aws lexv2-models update-bot-locale \
+                --bot-id "$BOT_ID" \
+                --bot-version "DRAFT" \
+                --locale-id "$LOCALE_ID" \
+                --nlu-intent-confidence-threshold "$NLU_CONFIDENCE" \
+                --region "$REGION"
+
+              echo "Bot locale updated"
+            fi
+
+            # Update intents
+            if [ -d "$INTENTS_DIR" ]; then
+              echo "Updating intents from $INTENTS_DIR..."
+
+              # List existing intents
+              EXISTING_INTENTS=$(aws lexv2-models list-intents \
+                --bot-id "$BOT_ID" \
+                --bot-version "DRAFT" \
+                --locale-id "$LOCALE_ID" \
+                --region "$REGION" \
+                --query 'intentSummaries[].{id:intentId,name:intentName}' \
+                --output json)
+
+              for intent_file in "$INTENTS_DIR"/*.json; do
+                [ -f "$intent_file" ] || continue
+                INTENT_NAME=$(jq -r '.intentName' "$intent_file")
+
+                # Find existing intent ID by name
+                INTENT_ID=$(echo "$EXISTING_INTENTS" | jq -r --arg name "$INTENT_NAME" '.[] | select(.name == $name) | .id // empty')
+
+                if [ -n "$INTENT_ID" ]; then
+                  echo "  Updating intent: $INTENT_NAME ($INTENT_ID)"
+                  aws lexv2-models update-intent \
+                    --bot-id "$BOT_ID" \
+                    --bot-version "DRAFT" \
+                    --locale-id "$LOCALE_ID" \
+                    --intent-id "$INTENT_ID" \
+                    --cli-input-json file://"$intent_file" \
+                    --region "$REGION"
+                else
+                  echo "  Creating intent: $INTENT_NAME"
+                  aws lexv2-models create-intent \
+                    --bot-id "$BOT_ID" \
+                    --bot-version "DRAFT" \
+                    --locale-id "$LOCALE_ID" \
+                    --cli-input-json file://"$intent_file" \
+                    --region "$REGION"
+                fi
+              done
+            fi
+
+            # Build bot locale
+            if [ "$AUTO_BUILD" = "true" ]; then
+              echo "Building bot locale..."
+              aws lexv2-models build-bot-locale \
+                --bot-id "$BOT_ID" \
+                --bot-version "DRAFT" \
+                --locale-id "$LOCALE_ID" \
+                --region "$REGION"
+
+              echo "Waiting for build to complete..."
+              while true; do
+                STATUS=$(aws lexv2-models describe-bot-locale \
+                  --bot-id "$BOT_ID" \
+                  --bot-version "DRAFT" \
+                  --locale-id "$LOCALE_ID" \
+                  --region "$REGION" \
+                  --query 'botLocaleStatus' --output text)
+
+                echo "  Build status: $STATUS"
+
+                if [ "$STATUS" = "Built" ] || [ "$STATUS" = "ReadyExpressTesting" ]; then
+                  echo "Build completed successfully"
+                  break
+                elif [ "$STATUS" = "Failed" ]; then
+                  echo "::error::Bot locale build failed for $NAME"
+                  exit 1
+                fi
+
+                sleep 10
+              done
+            fi
+
+            echo "Successfully deployed: $NAME"
+          done

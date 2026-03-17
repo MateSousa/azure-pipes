@@ -1,0 +1,260 @@
+# Caller workflow: Deploy Connect contact flows, modules, and Lex bots
+# Place this in the application repo at .github/workflows/deploy-connect-lex.yml
+#
+# Resources deployed:
+#   Connect contact flows: pwc_dynamic_navigator, pwc_internal_test_ivr_fidelis,
+#                          pwc_poc_collector_bot_test, pwc_poc_supervisor_barge_collector_bot
+#   Connect modules:       Send_DTMF
+#   Lex bots:              Collector, DynamicNavigator
+
+name: Deploy Connect & Lex
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "AWSConsole/Connect/contact-flows/**"
+      - "AWSConsole/Connect/modules/**"
+      - "AWSConsole/Lex/**"
+  workflow_dispatch:
+    inputs:
+      component:
+        description: "Component to deploy"
+        required: true
+        type: choice
+        options:
+          - all
+          - contact-flows
+          - modules
+          - lex
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - qa
+          - prod
+        default: dev
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ---------- Detect which components changed ----------
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    outputs:
+      contact-flows: ${{ steps.filter.outputs.contact-flows }}
+      modules: ${{ steps.filter.outputs.modules }}
+      lex: ${{ steps.filter.outputs.lex }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            contact-flows:
+              - 'AWSConsole/Connect/contact-flows/**'
+            modules:
+              - 'AWSConsole/Connect/modules/**'
+            lex:
+              - 'AWSConsole/Lex/**'
+
+  # ========== DEV ==========
+
+  deploy-connect-flows-dev:
+    name: Contact Flows → Dev
+    needs: [changes]
+    if: |
+      (github.event_name == 'push' && needs.changes.outputs.contact-flows == 'true') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.component == 'all' || inputs.component == 'contact-flows') && inputs.environment == 'dev')
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-connect.yml@main
+    with:
+      environment: dev
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_DEV }}
+      aws-region: us-east-1
+      instance-id: ${{ vars.CONNECT_INSTANCE_ID }}
+      contact-flows: |
+        [
+          {"name": "pwc_dynamic_navigator",                "id": "${{ vars.FLOW_ID_DYNAMIC_NAVIGATOR }}",                "file": "AWSConsole/Connect/contact-flows/pwc_dynamic_navigator.json"},
+          {"name": "pwc_internal_test_ivr_fidelis",        "id": "${{ vars.FLOW_ID_INTERNAL_TEST_IVR_FIDELIS }}",       "file": "AWSConsole/Connect/contact-flows/pwc_internal_test_ivr_fidelis.json"},
+          {"name": "pwc_poc_collector_bot_test",           "id": "${{ vars.FLOW_ID_POC_COLLECTOR_BOT_TEST }}",          "file": "AWSConsole/Connect/contact-flows/pwc_poc_collector_bot_test.json"},
+          {"name": "pwc_poc_supervisor_barge_collector_bot","id": "${{ vars.FLOW_ID_SUPERVISOR_BARGE_COLLECTOR_BOT }}", "file": "AWSConsole/Connect/contact-flows/pwc_poc_supervisor_barge_collector_bot.json"}
+        ]
+
+  deploy-connect-modules-dev:
+    name: Modules → Dev
+    needs: [changes]
+    if: |
+      (github.event_name == 'push' && needs.changes.outputs.modules == 'true') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.component == 'all' || inputs.component == 'modules') && inputs.environment == 'dev')
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-connect.yml@main
+    with:
+      environment: dev
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_DEV }}
+      aws-region: us-east-1
+      instance-id: ${{ vars.CONNECT_INSTANCE_ID }}
+      modules: |
+        [
+          {"name": "Send_DTMF", "id": "${{ vars.MODULE_ID_SEND_DTMF }}", "file": "AWSConsole/Connect/modules/Send_DTMF.json"}
+        ]
+
+  deploy-lex-dev:
+    name: Lex Bots → Dev
+    needs: [changes]
+    if: |
+      (github.event_name == 'push' && needs.changes.outputs.lex == 'true') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.component == 'all' || inputs.component == 'lex') && inputs.environment == 'dev')
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lex.yml@main
+    with:
+      environment: dev
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_DEV }}
+      aws-region: us-east-1
+      auto-build: true
+      bots: |
+        [
+          {
+            "name": "Collector",
+            "bot-id": "${{ vars.LEX_BOT_ID_COLLECTOR }}",
+            "locale-id": "en_US",
+            "bot-json": "AWSConsole/Lex/Collector/Bot.json",
+            "locale-json": "AWSConsole/Lex/Collector/BotLocales/en_US/BotLocale.json",
+            "intents-dir": "AWSConsole/Lex/Collector/BotLocales/en_US/Intents"
+          },
+          {
+            "name": "DynamicNavigator",
+            "bot-id": "${{ vars.LEX_BOT_ID_DYNAMIC_NAVIGATOR }}",
+            "locale-id": "en_US",
+            "bot-json": "AWSConsole/Lex/DynamicNavigator/Bot.json",
+            "locale-json": "AWSConsole/Lex/DynamicNavigator/BotLocales/en_US/BotLocale.json",
+            "intents-dir": "AWSConsole/Lex/DynamicNavigator/BotLocales/en_US/Intents"
+          }
+        ]
+
+  # ========== QA (workflow_dispatch only) ==========
+
+  deploy-connect-flows-qa:
+    name: Contact Flows → QA
+    if: github.event_name == 'workflow_dispatch' && (inputs.component == 'all' || inputs.component == 'contact-flows') && inputs.environment == 'qa'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-connect.yml@main
+    with:
+      environment: qa
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_QA }}
+      aws-region: us-east-1
+      instance-id: ${{ vars.CONNECT_INSTANCE_ID }}
+      contact-flows: |
+        [
+          {"name": "pwc_dynamic_navigator",                "id": "${{ vars.FLOW_ID_DYNAMIC_NAVIGATOR }}",                "file": "AWSConsole/Connect/contact-flows/pwc_dynamic_navigator.json"},
+          {"name": "pwc_internal_test_ivr_fidelis",        "id": "${{ vars.FLOW_ID_INTERNAL_TEST_IVR_FIDELIS }}",       "file": "AWSConsole/Connect/contact-flows/pwc_internal_test_ivr_fidelis.json"},
+          {"name": "pwc_poc_collector_bot_test",           "id": "${{ vars.FLOW_ID_POC_COLLECTOR_BOT_TEST }}",          "file": "AWSConsole/Connect/contact-flows/pwc_poc_collector_bot_test.json"},
+          {"name": "pwc_poc_supervisor_barge_collector_bot","id": "${{ vars.FLOW_ID_SUPERVISOR_BARGE_COLLECTOR_BOT }}", "file": "AWSConsole/Connect/contact-flows/pwc_poc_supervisor_barge_collector_bot.json"}
+        ]
+
+  deploy-connect-modules-qa:
+    name: Modules → QA
+    if: github.event_name == 'workflow_dispatch' && (inputs.component == 'all' || inputs.component == 'modules') && inputs.environment == 'qa'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-connect.yml@main
+    with:
+      environment: qa
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_QA }}
+      aws-region: us-east-1
+      instance-id: ${{ vars.CONNECT_INSTANCE_ID }}
+      modules: |
+        [
+          {"name": "Send_DTMF", "id": "${{ vars.MODULE_ID_SEND_DTMF }}", "file": "AWSConsole/Connect/modules/Send_DTMF.json"}
+        ]
+
+  deploy-lex-qa:
+    name: Lex Bots → QA
+    if: github.event_name == 'workflow_dispatch' && (inputs.component == 'all' || inputs.component == 'lex') && inputs.environment == 'qa'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lex.yml@main
+    with:
+      environment: qa
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_QA }}
+      aws-region: us-east-1
+      auto-build: true
+      bots: |
+        [
+          {
+            "name": "Collector",
+            "bot-id": "${{ vars.LEX_BOT_ID_COLLECTOR }}",
+            "locale-id": "en_US",
+            "bot-json": "AWSConsole/Lex/Collector/Bot.json",
+            "locale-json": "AWSConsole/Lex/Collector/BotLocales/en_US/BotLocale.json",
+            "intents-dir": "AWSConsole/Lex/Collector/BotLocales/en_US/Intents"
+          },
+          {
+            "name": "DynamicNavigator",
+            "bot-id": "${{ vars.LEX_BOT_ID_DYNAMIC_NAVIGATOR }}",
+            "locale-id": "en_US",
+            "bot-json": "AWSConsole/Lex/DynamicNavigator/Bot.json",
+            "locale-json": "AWSConsole/Lex/DynamicNavigator/BotLocales/en_US/BotLocale.json",
+            "intents-dir": "AWSConsole/Lex/DynamicNavigator/BotLocales/en_US/Intents"
+          }
+        ]
+
+  # ========== Prod (workflow_dispatch only) ==========
+
+  deploy-connect-flows-prod:
+    name: Contact Flows → Prod
+    if: github.event_name == 'workflow_dispatch' && (inputs.component == 'all' || inputs.component == 'contact-flows') && inputs.environment == 'prod'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-connect.yml@main
+    with:
+      environment: prod
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_PROD }}
+      aws-region: us-east-1
+      instance-id: ${{ vars.CONNECT_INSTANCE_ID }}
+      contact-flows: |
+        [
+          {"name": "pwc_dynamic_navigator",                "id": "${{ vars.FLOW_ID_DYNAMIC_NAVIGATOR }}",                "file": "AWSConsole/Connect/contact-flows/pwc_dynamic_navigator.json"},
+          {"name": "pwc_internal_test_ivr_fidelis",        "id": "${{ vars.FLOW_ID_INTERNAL_TEST_IVR_FIDELIS }}",       "file": "AWSConsole/Connect/contact-flows/pwc_internal_test_ivr_fidelis.json"},
+          {"name": "pwc_poc_collector_bot_test",           "id": "${{ vars.FLOW_ID_POC_COLLECTOR_BOT_TEST }}",          "file": "AWSConsole/Connect/contact-flows/pwc_poc_collector_bot_test.json"},
+          {"name": "pwc_poc_supervisor_barge_collector_bot","id": "${{ vars.FLOW_ID_SUPERVISOR_BARGE_COLLECTOR_BOT }}", "file": "AWSConsole/Connect/contact-flows/pwc_poc_supervisor_barge_collector_bot.json"}
+        ]
+
+  deploy-connect-modules-prod:
+    name: Modules → Prod
+    if: github.event_name == 'workflow_dispatch' && (inputs.component == 'all' || inputs.component == 'modules') && inputs.environment == 'prod'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-connect.yml@main
+    with:
+      environment: prod
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_PROD }}
+      aws-region: us-east-1
+      instance-id: ${{ vars.CONNECT_INSTANCE_ID }}
+      modules: |
+        [
+          {"name": "Send_DTMF", "id": "${{ vars.MODULE_ID_SEND_DTMF }}", "file": "AWSConsole/Connect/modules/Send_DTMF.json"}
+        ]
+
+  deploy-lex-prod:
+    name: Lex Bots → Prod
+    if: github.event_name == 'workflow_dispatch' && (inputs.component == 'all' || inputs.component == 'lex') && inputs.environment == 'prod'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lex.yml@main
+    with:
+      environment: prod
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_PROD }}
+      aws-region: us-east-1
+      auto-build: true
+      bots: |
+        [
+          {
+            "name": "Collector",
+            "bot-id": "${{ vars.LEX_BOT_ID_COLLECTOR }}",
+            "locale-id": "en_US",
+            "bot-json": "AWSConsole/Lex/Collector/Bot.json",
+            "locale-json": "AWSConsole/Lex/Collector/BotLocales/en_US/BotLocale.json",
+            "intents-dir": "AWSConsole/Lex/Collector/BotLocales/en_US/Intents"
+          },
+          {
+            "name": "DynamicNavigator",
+            "bot-id": "${{ vars.LEX_BOT_ID_DYNAMIC_NAVIGATOR }}",
+            "locale-id": "en_US",
+            "bot-json": "AWSConsole/Lex/DynamicNavigator/Bot.json",
+            "locale-json": "AWSConsole/Lex/DynamicNavigator/BotLocales/en_US/BotLocale.json",
+            "intents-dir": "AWSConsole/Lex/DynamicNavigator/BotLocales/en_US/Intents"
+          }
+        ]

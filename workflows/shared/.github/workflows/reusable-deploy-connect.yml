@@ -1,0 +1,127 @@
+# Reusable workflow: Deploy Amazon Connect contact flows and modules
+#
+# Usage from application repos:
+#   uses: your-org/shared-workflows/.github/workflows/reusable-deploy-connect.yml@main
+
+name: Deploy Connect
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment name (dev, qa, prod)"
+        required: true
+        type: string
+      aws-role-arn:
+        description: "IAM role ARN for OIDC assume-role"
+        required: true
+        type: string
+      aws-region:
+        description: "AWS region"
+        required: true
+        type: string
+      instance-id:
+        description: "Amazon Connect instance ID"
+        required: true
+        type: string
+      contact-flows:
+        description: >
+          JSON array of contact flows to deploy.
+          Each entry: {"name": "display name", "id": "contact-flow-id", "file": "path/to/flow.json"}
+        required: false
+        type: string
+        default: "[]"
+      modules:
+        description: >
+          JSON array of contact flow modules to deploy.
+          Each entry: {"name": "display name", "id": "module-id", "file": "path/to/module.json"}
+        required: false
+        type: string
+        default: "[]"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-contact-flows:
+    name: Deploy contact flows to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    if: inputs.contact-flows != '[]'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Deploy contact flows
+        env:
+          INSTANCE_ID: ${{ inputs.instance-id }}
+          FLOWS: ${{ inputs.contact-flows }}
+        run: |
+          echo "$FLOWS" | jq -c '.[]' | while read -r flow; do
+            NAME=$(echo "$flow" | jq -r '.name')
+            FLOW_ID=$(echo "$flow" | jq -r '.id')
+            FILE=$(echo "$flow" | jq -r '.file')
+
+            echo "Deploying contact flow: $NAME ($FLOW_ID)"
+
+            if [ ! -f "$FILE" ]; then
+              echo "::error::File not found: $FILE"
+              exit 1
+            fi
+
+            aws connect update-contact-flow-content \
+              --instance-id "$INSTANCE_ID" \
+              --contact-flow-id "$FLOW_ID" \
+              --content file://"$FILE" \
+              --region ${{ inputs.aws-region }}
+
+            echo "Successfully deployed: $NAME"
+          done
+
+  deploy-modules:
+    name: Deploy modules to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    if: inputs.modules != '[]'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Deploy contact flow modules
+        env:
+          INSTANCE_ID: ${{ inputs.instance-id }}
+          MODULES: ${{ inputs.modules }}
+        run: |
+          echo "$MODULES" | jq -c '.[]' | while read -r mod; do
+            NAME=$(echo "$mod" | jq -r '.name')
+            MODULE_ID=$(echo "$mod" | jq -r '.id')
+            FILE=$(echo "$mod" | jq -r '.file')
+
+            echo "Deploying module: $NAME ($MODULE_ID)"
+
+            if [ ! -f "$FILE" ]; then
+              echo "::error::File not found: $FILE"
+              exit 1
+            fi
+
+            aws connect update-contact-flow-module-content \
+              --instance-id "$INSTANCE_ID" \
+              --contact-flow-module-id "$MODULE_ID" \
+              --content file://"$FILE" \
+              --region ${{ inputs.aws-region }}
+
+            echo "Successfully deployed: $NAME"
+          done
