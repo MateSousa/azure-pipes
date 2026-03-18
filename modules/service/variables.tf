@@ -39,12 +39,12 @@ variable "ecs" {
     cluster_id          = string
     task_definition_arn = string
     container_name      = string
-    container_port      = number
+    container_port      = optional(number, null)
   })
 
   validation {
-    condition     = var.ecs.container_port >= 1 && var.ecs.container_port <= 65535
-    error_message = "container_port must be between 1 and 65535."
+    condition     = var.ecs.container_port == null ? true : (var.ecs.container_port >= 1 && var.ecs.container_port <= 65535)
+    error_message = "container_port must be null or between 1 and 65535."
   }
 }
 
