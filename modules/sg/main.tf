@@ -17,11 +17,11 @@ resource "aws_security_group_rule" "ingress" {
   from_port         = var.ingress_rules[count.index].from_port
   to_port           = var.ingress_rules[count.index].to_port
   protocol          = var.ingress_rules[count.index].protocol
-  cidr_blocks       = var.ingress_rules[count.index].cidr_blocks
-  ipv6_cidr_blocks  = var.ingress_rules[count.index].ipv6_cidr_blocks
-  self              = var.ingress_rules[count.index].self
 
+  cidr_blocks              = var.ingress_rules[count.index].self || length(var.ingress_rules[count.index].security_groups) > 0 ? null : var.ingress_rules[count.index].cidr_blocks
+  ipv6_cidr_blocks         = var.ingress_rules[count.index].self || length(var.ingress_rules[count.index].security_groups) > 0 ? null : var.ingress_rules[count.index].ipv6_cidr_blocks
   source_security_group_id = length(var.ingress_rules[count.index].security_groups) > 0 ? var.ingress_rules[count.index].security_groups[0] : null
+  self                     = var.ingress_rules[count.index].self ? true : null
 }
 
 resource "aws_security_group_rule" "egress" {
@@ -33,9 +33,9 @@ resource "aws_security_group_rule" "egress" {
   from_port         = var.egress_rules[count.index].from_port
   to_port           = var.egress_rules[count.index].to_port
   protocol          = var.egress_rules[count.index].protocol
-  cidr_blocks       = var.egress_rules[count.index].cidr_blocks
-  ipv6_cidr_blocks  = var.egress_rules[count.index].ipv6_cidr_blocks
-  self              = var.egress_rules[count.index].self
 
+  cidr_blocks              = var.egress_rules[count.index].self || length(var.egress_rules[count.index].security_groups) > 0 ? null : var.egress_rules[count.index].cidr_blocks
+  ipv6_cidr_blocks         = var.egress_rules[count.index].self || length(var.egress_rules[count.index].security_groups) > 0 ? null : var.egress_rules[count.index].ipv6_cidr_blocks
   source_security_group_id = length(var.egress_rules[count.index].security_groups) > 0 ? var.egress_rules[count.index].security_groups[0] : null
+  self                     = var.egress_rules[count.index].self ? true : null
 }
