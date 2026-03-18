@@ -28,7 +28,6 @@ locals {
       runtime     = "nodejs20.x"
       memory      = 256
       timeout     = 30
-      source_path = "${path.module}/src/auth"
       environment_variables = {
         TABLE_NAME = module.sessions_table.table_name
       }
@@ -39,7 +38,6 @@ locals {
       runtime               = "nodejs20.x"
       memory                = 256
       timeout               = 60
-      source_path           = "${path.module}/src/fulfillment"
       environment_variables = {}
     }
     ingest = {
@@ -48,7 +46,6 @@ locals {
       runtime               = "python3.12"
       memory                = 512
       timeout               = 300
-      source_path           = "${path.module}/src/ingest"
       environment_variables = {}
     }
     notify = {
@@ -57,7 +54,6 @@ locals {
       runtime               = "nodejs20.x"
       memory                = 128
       timeout               = 15
-      source_path           = "${path.module}/src/notify"
       environment_variables = {}
     }
     cleanup = {
@@ -66,7 +62,6 @@ locals {
       runtime               = "python3.12"
       memory                = 128
       timeout               = 900
-      source_path           = "${path.module}/src/cleanup"
       environment_variables = {}
     }
   }
@@ -110,10 +105,6 @@ module "lambdas" {
     memory                = each.value.memory
     timeout               = each.value.timeout
     environment_variables = each.value.environment_variables
-  }
-
-  source_config = {
-    source_path = each.value.source_path
   }
 
   iam = {

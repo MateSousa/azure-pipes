@@ -79,17 +79,14 @@ variable "lambda" {
 ########################################
 
 variable "source_config" {
-  description = "Lambda deployment package configuration."
+  description = "Lambda deployment package configuration. For Zip package type, the module automatically uses a built-in placeholder — real code is deployed via CI/CD. For Image package type, provide image_uri."
   type = object({
-    source_path       = optional(string, null)
-    filename          = optional(string, null)
-    source_code_hash  = optional(string, null)
-    s3_bucket         = optional(string, null)
-    s3_key            = optional(string, null)
-    s3_object_version = optional(string, null)
-    image_uri         = optional(string, null)
-    package_type      = optional(string, "Zip")
+    image_uri    = optional(string, null)
+    package_type = optional(string, "Zip")
   })
+  default = {
+    package_type = "Zip"
+  }
 
   validation {
     condition     = contains(["Zip", "Image"], var.source_config.package_type)

@@ -1,22 +1,22 @@
 ########################################
-# Auto-zip
-########################################
-
-data "archive_file" "this" {
-  count       = var.source_config.source_path != null ? 1 : 0
-  type        = "zip"
-  source_dir  = var.source_config.source_path
-  output_path = "${path.module}/.zip/${var.project_name}-${var.lambda.name}.zip"
-}
-
-########################################
 # Locals
 ########################################
 
 locals {
-  use_archive      = var.source_config.source_path != null && var.source_config.package_type == "Zip"
-  filename         = local.use_archive ? data.archive_file.this[0].output_path : var.source_config.filename
-  source_code_hash = local.use_archive ? data.archive_file.this[0].output_base64sha256 : var.source_config.source_code_hash
+  is_zip          = var.source_config.package_type == "Zip"
+  is_python       = local.is_zip && can(regex("^python", var.lambda.runtime))
+  placeholder_dir = local.is_python ? "${path.module}/placeholders/python" : "${path.module}/placeholders/nodejs"
+}
+
+########################################
+# Auto-zip placeholder
+########################################
+
+data "archive_file" "this" {
+  count       = local.is_zip ? 1 : 0
+  type        = "zip"
+  source_dir  = local.placeholder_dir
+  output_path = "${path.module}/.zip/${var.project_name}-${var.lambda.name}.zip"
 }
 
 ########################################
@@ -36,8 +36,8 @@ resource "aws_cloudwatch_log_group" "this" {
 resource "aws_lambda_function" "this" {
   function_name = "${var.project_name}-${var.lambda.name}"
   description   = var.lambda.description
-  handler       = var.source_config.package_type == "Image" ? null : var.lambda.handler
-  runtime       = var.source_config.package_type == "Image" ? null : var.lambda.runtime
+  handler       = local.is_zip ? var.lambda.handler : null
+  runtime       = local.is_zip ? var.lambda.runtime : null
   role          = var.iam.role_arn
 
   memory_size                    = var.lambda.memory
@@ -47,16 +47,13 @@ resource "aws_lambda_function" "this" {
   architectures                  = var.lambda.architectures
   layers                         = var.lambda.layers
 
-  # Packaging — Zip
-  package_type      = var.source_config.package_type
-  filename          = var.source_config.package_type == "Zip" ? local.filename : null
-  source_code_hash  = var.source_config.package_type == "Zip" ? local.source_code_hash : null
-  s3_bucket         = var.source_config.package_type == "Zip" ? var.source_config.s3_bucket : null
-  s3_key            = var.source_config.package_type == "Zip" ? var.source_config.s3_key : null
-  s3_object_version = var.source_config.package_type == "Zip" ? var.source_config.s3_object_version : null
+  # Packaging — Zip (placeholder, real code deployed via CI/CD)
+  package_type     = var.source_config.package_type
+  filename         = local.is_zip ? data.archive_file.this[0].output_path : null
+  source_code_hash = local.is_zip ? data.archive_file.this[0].output_base64sha256 : null
 
   # Packaging — Image
-  image_uri = var.source_config.package_type == "Image" ? var.source_config.image_uri : null
+  image_uri = local.is_zip ? null : var.source_config.image_uri
 
   # VPC
   dynamic "vpc_config" {
@@ -94,4 +91,9 @@ resource "aws_lambda_function" "this" {
   depends_on = [aws_cloudwatch_log_group.this]
 
   tags = var.tags
+
+  # Real code is deployed via CI/CD — don't revert to placeholder on apply
+  lifecycle {
+    ignore_changes = [filename, source_code_hash, image_uri]
+  }
 }
