@@ -39,18 +39,8 @@ variable "lambda" {
   }
 
   validation {
-    condition = var.lambda.runtime == null || contains(
-      [
-        "nodejs18.x", "nodejs20.x", "nodejs22.x",
-        "python3.9", "python3.10", "python3.11", "python3.12", "python3.13",
-        "java17", "java21",
-        "dotnet8",
-        "ruby3.3",
-        "provided.al2", "provided.al2023",
-      ],
-      var.lambda.runtime,
-    )
-    error_message = "runtime must be one of the supported AWS Lambda runtimes or null (for Image package type)."
+    condition     = var.lambda.runtime == null || can(regex("^(nodejs|python|java|dotnet|ruby|provided)", var.lambda.runtime))
+    error_message = "runtime must be a valid AWS Lambda runtime identifier or null (for Image package type)."
   }
 
   validation {
