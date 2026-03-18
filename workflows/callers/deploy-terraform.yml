@@ -1,0 +1,124 @@
+# Caller workflow: Deploy infrastructure via Terraform
+#
+# Place this in your application repo at .github/workflows/deploy-terraform.yml
+#
+# This workflow:
+#   1. Validates Terraform (fmt + validate) on every push/PR
+#   2. Deploys dev → qa → prod on push to main
+#   3. QA and Prod require manual approval via GitHub Environment protection rules
+#
+# Prerequisites:
+#   - GitHub Environments: dev-plan, dev, qa-plan, qa, prod-plan, prod
+#   - Environment variable AWS_ROLE_ARN set in each environment
+#   - Terraform state backend configured in environments/*/backend.hcl
+#   - Variables per environment in environments/*/terraform.tfvars
+#
+# Directory structure expected in the application repo:
+#   terraform/
+#     main.tf
+#     variables.tf
+#     outputs.tf
+#     environments/
+#       dev/
+#         backend.hcl
+#         terraform.tfvars
+#       qa/
+#         backend.hcl
+#         terraform.tfvars
+#       prod/
+#         backend.hcl
+#         terraform.tfvars
+
+name: Deploy Terraform
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "terraform/**"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ------------------------------------------------------------------
+  # Validate: runs on every push/PR, no AWS credentials needed
+  # ------------------------------------------------------------------
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.0"
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Init (local backend)
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+  # ------------------------------------------------------------------
+  # Deploy Dev — automatic on push to main
+  # ------------------------------------------------------------------
+  deploy-dev:
+    name: Dev
+    needs: validate
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-terraform.yml@main
+    with:
+      environment: dev
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_DEV }}
+      aws-region: us-east-1
+      working-directory: terraform
+    permissions:
+      id-token: write
+      contents: read
+
+  # ------------------------------------------------------------------
+  # Deploy QA — requires manual approval
+  # ------------------------------------------------------------------
+  deploy-qa:
+    name: QA
+    needs: deploy-dev
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-terraform.yml@main
+    with:
+      environment: qa
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_QA }}
+      aws-region: us-east-1
+      working-directory: terraform
+    permissions:
+      id-token: write
+      contents: read
+
+  # ------------------------------------------------------------------
+  # Deploy Prod — requires manual approval
+  # ------------------------------------------------------------------
+  deploy-prod:
+    name: Prod
+    needs: deploy-qa
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-terraform.yml@main
+    with:
+      environment: prod
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_PROD }}
+      aws-region: us-east-1
+      working-directory: terraform
+    permissions:
+      id-token: write
+      contents: read
