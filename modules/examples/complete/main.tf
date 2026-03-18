@@ -275,6 +275,52 @@ module "web_alb" {
 }
 
 # -----------------------------------------------------------------------------
+# ECR Repositories
+# -----------------------------------------------------------------------------
+
+module "web_ecr" {
+  source = "../../ecr"
+
+  project_name = local.project_name
+
+  repository = {
+    name = "web"
+  }
+
+  lifecycle_policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Keep last 10 images"
+        selection = {
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = 10
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+
+  tags = local.tags
+}
+
+module "batch_ecr" {
+  source = "../../ecr"
+
+  project_name = local.project_name
+
+  repository = {
+    name                 = "batch"
+    image_tag_mutability = "MUTABLE"
+  }
+
+  tags = local.tags
+}
+
+# -----------------------------------------------------------------------------
 # ECS Cluster
 # -----------------------------------------------------------------------------
 
@@ -313,7 +359,7 @@ module "web_task" {
     cpu             = "512"
     memory          = "1024"
     container_name  = "web"
-    container_image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/web:latest"
+    container_image = "${module.web_ecr.repository_url}:latest"
     container_port  = 8080
     environment_variables = {
       TABLE_NAME = module.sessions_table.table_name
@@ -346,7 +392,7 @@ module "batch_task" {
     cpu             = "256"
     memory          = "512"
     container_name  = "batch"
-    container_image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/batch:latest"
+    container_image = "${module.batch_ecr.repository_url}:latest"
     command         = ["node", "worker.js"]
     environment_variables = {
       TABLE_NAME = module.sessions_table.table_name
