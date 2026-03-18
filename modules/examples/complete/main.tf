@@ -20,171 +20,104 @@ locals {
     Environment = "dev"
     ManagedBy   = "terraform"
   }
+
+  lambdas = {
+    auth = {
+      description = "Authentication handler"
+      handler     = "index.handler"
+      runtime     = "nodejs20.x"
+      memory      = 256
+      timeout     = 30
+      source_path = "${path.module}/src/auth"
+      environment_variables = {
+        TABLE_NAME = module.sessions_table.table_name
+      }
+    }
+    fulfillment = {
+      description           = "Lex fulfillment handler"
+      handler               = "index.handler"
+      runtime               = "nodejs20.x"
+      memory                = 256
+      timeout               = 60
+      source_path           = "${path.module}/src/fulfillment"
+      environment_variables = {}
+    }
+    ingest = {
+      description           = "Data ingestion processor"
+      handler               = "handler.main"
+      runtime               = "python3.12"
+      memory                = 512
+      timeout               = 300
+      source_path           = "${path.module}/src/ingest"
+      environment_variables = {}
+    }
+    notify = {
+      description           = "Notification sender"
+      handler               = "index.handler"
+      runtime               = "nodejs20.x"
+      memory                = 128
+      timeout               = 15
+      source_path           = "${path.module}/src/notify"
+      environment_variables = {}
+    }
+    cleanup = {
+      description           = "Scheduled cleanup job"
+      handler               = "handler.main"
+      runtime               = "python3.12"
+      memory                = 128
+      timeout               = 900
+      source_path           = "${path.module}/src/cleanup"
+      environment_variables = {}
+    }
+  }
 }
 
 # -----------------------------------------------------------------------------
-# IAM Roles
+# IAM Roles (looked up from existing roles)
 # -----------------------------------------------------------------------------
 
-module "lambda_role" {
-  source = "../../iam"
-
-  project_name = local.project_name
-
-  role = {
-    name        = "lambda-exec"
-    description = "Lambda execution role"
-    assume_role_principals = [
-      {
-        type        = "Service"
-        identifiers = ["lambda.amazonaws.com"]
-      }
-    ]
-  }
-
-  policies = {
-    managed_policy_arns = [
-      "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
-      "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
-    ]
-  }
-
-  tags = local.tags
+data "aws_iam_role" "lambda" {
+  name = "${local.project_name}-lambda-exec"
 }
 
-module "ecs_execution_role" {
-  source = "../../iam"
-
-  project_name = local.project_name
-
-  role = {
-    name        = "ecs-execution"
-    description = "ECS task execution role"
-    assume_role_principals = [
-      {
-        type        = "Service"
-        identifiers = ["ecs-tasks.amazonaws.com"]
-      }
-    ]
-  }
-
-  policies = {
-    managed_policy_arns = [
-      "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
-    ]
-  }
-
-  tags = local.tags
+data "aws_iam_role" "ecs_execution" {
+  name = "${local.project_name}-ecs-execution"
 }
 
-module "ecs_task_role" {
-  source = "../../iam"
-
-  project_name = local.project_name
-
-  role = {
-    name        = "ecs-task"
-    description = "ECS task role"
-    assume_role_principals = [
-      {
-        type        = "Service"
-        identifiers = ["ecs-tasks.amazonaws.com"]
-      }
-    ]
-  }
-
-  policies = {
-    managed_policy_arns = []
-    inline_policies = [
-      {
-        name = "dynamodb-access"
-        policy = jsonencode({
-          Version = "2012-10-17"
-          Statement = [
-            {
-              Effect   = "Allow"
-              Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"]
-              Resource = [module.sessions_table.table_arn]
-            }
-          ]
-        })
-      }
-    ]
-  }
-
-  tags = local.tags
+data "aws_iam_role" "ecs_task" {
+  name = "${local.project_name}-ecs-task"
 }
 
-module "lex_role" {
-  source = "../../iam"
-
-  project_name = local.project_name
-
-  role = {
-    name        = "lex-bot"
-    description = "Lex bot role"
-    assume_role_principals = [
-      {
-        type        = "Service"
-        identifiers = ["lexv2.amazonaws.com"]
-      }
-    ]
-  }
-
-  policies = {
-    managed_policy_arns = []
-    inline_policies = [
-      {
-        name = "lex-lambda-invoke"
-        policy = jsonencode({
-          Version = "2012-10-17"
-          Statement = [
-            {
-              Effect   = "Allow"
-              Action   = ["lambda:InvokeFunction"]
-              Resource = [module.fulfillment_lambda.function_arn]
-            }
-          ]
-        })
-      }
-    ]
-  }
-
-  tags = local.tags
+data "aws_iam_role" "lex" {
+  name = "${local.project_name}-lex-bot"
 }
 
 # -----------------------------------------------------------------------------
-# Lambda
+# Lambda (for_each over local.lambdas)
 # -----------------------------------------------------------------------------
 
-module "fulfillment_lambda" {
-  source = "../../lambda"
+module "lambdas" {
+  source   = "../../lambda"
+  for_each = local.lambdas
 
   project_name = local.project_name
 
   lambda = {
-    name        = "fulfillment"
-    description = "Lex fulfillment handler"
-    handler     = "index.handler"
-    runtime     = "nodejs20.x"
-    memory      = 256
-    timeout     = 30
+    name                  = each.key
+    description           = each.value.description
+    handler               = each.value.handler
+    runtime               = each.value.runtime
+    memory                = each.value.memory
+    timeout               = each.value.timeout
+    environment_variables = each.value.environment_variables
   }
 
   source_config = {
-    source_path = "${path.module}/src/fulfillment"
+    source_path = each.value.source_path
   }
 
   iam = {
-    role_arn = module.lambda_role.role_arn
-  }
-
-  logging = {
-    retention_in_days = 14
-  }
-
-  tracing = {
-    mode = "Active"
+    role_arn = data.aws_iam_role.lambda.arn
   }
 
   tags = local.tags
@@ -275,16 +208,17 @@ module "web_alb" {
 }
 
 # -----------------------------------------------------------------------------
-# ECR Repositories
+# ECR Repositories (for_each over local.lambdas)
 # -----------------------------------------------------------------------------
 
-module "web_ecr" {
-  source = "../../ecr"
+module "ecr_repos" {
+  source   = "../../ecr"
+  for_each = local.lambdas
 
   project_name = local.project_name
 
   repository = {
-    name = "web"
+    name = each.key
   }
 
   lifecycle_policy = jsonencode({
@@ -303,19 +237,6 @@ module "web_ecr" {
       }
     ]
   })
-
-  tags = local.tags
-}
-
-module "batch_ecr" {
-  source = "../../ecr"
-
-  project_name = local.project_name
-
-  repository = {
-    name                 = "batch"
-    image_tag_mutability = "MUTABLE"
-  }
 
   tags = local.tags
 }
@@ -359,7 +280,7 @@ module "web_task" {
     cpu             = "512"
     memory          = "1024"
     container_name  = "web"
-    container_image = "${module.web_ecr.repository_url}:latest"
+    container_image = "${module.ecr_repos["auth"].repository_url}:latest"
     container_port  = 8080
     environment_variables = {
       TABLE_NAME = module.sessions_table.table_name
@@ -367,8 +288,8 @@ module "web_task" {
   }
 
   iam = {
-    execution_role_arn = module.ecs_execution_role.role_arn
-    task_role_arn      = module.ecs_task_role.role_arn
+    execution_role_arn = data.aws_iam_role.ecs_execution.arn
+    task_role_arn      = data.aws_iam_role.ecs_task.arn
   }
 
   logging = {
@@ -392,7 +313,7 @@ module "batch_task" {
     cpu             = "256"
     memory          = "512"
     container_name  = "batch"
-    container_image = "${module.batch_ecr.repository_url}:latest"
+    container_image = "${module.ecr_repos["cleanup"].repository_url}:latest"
     command         = ["node", "worker.js"]
     environment_variables = {
       TABLE_NAME = module.sessions_table.table_name
@@ -400,8 +321,8 @@ module "batch_task" {
   }
 
   iam = {
-    execution_role_arn = module.ecs_execution_role.role_arn
-    task_role_arn      = module.ecs_task_role.role_arn
+    execution_role_arn = data.aws_iam_role.ecs_execution.arn
+    task_role_arn      = data.aws_iam_role.ecs_task.arn
   }
 
   logging = {
@@ -560,7 +481,7 @@ module "lex_bot" {
   bot = {
     name        = "support-bot"
     description = "Customer support bot"
-    role_arn    = module.lex_role.role_arn
+    role_arn    = data.aws_iam_role.lex.arn
   }
 
   locales = [
