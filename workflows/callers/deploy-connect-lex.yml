@@ -1,11 +1,32 @@
 # Caller workflow: Deploy Connect contact flows, modules, and Lex bots
 # Place this in the application repo at .github/workflows/deploy-connect-lex.yml
 #
-# Resources deployed:
-#   Connect contact flows: pwc_dynamic_navigator, pwc_internal_test_ivr_fidelis,
-#                          pwc_poc_collector_bot_test, pwc_poc_supervisor_barge_collector_bot
-#   Connect modules:       Send_DTMF
-#   Lex bots:              Collector, DynamicNavigator
+# Directory structure expected:
+#   Connect/
+#     contact-flows/
+#       pwc_dynamic_navigator.json
+#       pwc_internal_test_ivr_fidelis.json
+#       pwc_poc_collector_bot_test.json
+#       pwc_poc_supervisor_barge_collector_bot.json
+#     modules/
+#       Send DTMF.json
+#   Lex/
+#     Collector/
+#       Bot.json
+#       BotLocales/en_US/BotLocale.json
+#       BotLocales/en_US/Intents/FallbackIntent/Intent.json
+#     DynamicNavigator/
+#       Bot.json
+#       BotLocales/en_US/BotLocale.json
+#       BotLocales/en_US/Intents/FallbackIntent/Intent.json
+#       BotLocales/en_US/Intents/Placeholder/Intent.json
+#
+# Required GitHub Environment variables:
+#   CONNECT_INSTANCE_ID, AWS_ROLE_ARN_DEV/QA/PROD
+#   FLOW_ID_DYNAMIC_NAVIGATOR, FLOW_ID_INTERNAL_TEST_IVR_FIDELIS,
+#   FLOW_ID_POC_COLLECTOR_BOT_TEST, FLOW_ID_SUPERVISOR_BARGE_COLLECTOR_BOT
+#   MODULE_ID_SEND_DTMF
+#   LEX_BOT_ID_COLLECTOR, LEX_BOT_ID_DYNAMIC_NAVIGATOR
 
 name: Deploy Connect & Lex
 
@@ -13,9 +34,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "AWSConsole/Connect/contact-flows/**"
-      - "AWSConsole/Connect/modules/**"
-      - "AWSConsole/Lex/**"
+      - "Connect/**"
+      - "Lex/**"
   workflow_dispatch:
     inputs:
       component:
@@ -58,11 +78,11 @@ jobs:
         with:
           filters: |
             contact-flows:
-              - 'AWSConsole/Connect/contact-flows/**'
+              - 'Connect/contact-flows/**'
             modules:
-              - 'AWSConsole/Connect/modules/**'
+              - 'Connect/modules/**'
             lex:
-              - 'AWSConsole/Lex/**'
+              - 'Lex/**'
 
   # ========== DEV ==========
 
@@ -80,10 +100,10 @@ jobs:
       instance-id: ${{ vars.CONNECT_INSTANCE_ID }}
       contact-flows: |
         [
-          {"name": "pwc_dynamic_navigator",                "id": "${{ vars.FLOW_ID_DYNAMIC_NAVIGATOR }}",                "file": "AWSConsole/Connect/contact-flows/pwc_dynamic_navigator.json"},
-          {"name": "pwc_internal_test_ivr_fidelis",        "id": "${{ vars.FLOW_ID_INTERNAL_TEST_IVR_FIDELIS }}",       "file": "AWSConsole/Connect/contact-flows/pwc_internal_test_ivr_fidelis.json"},
-          {"name": "pwc_poc_collector_bot_test",           "id": "${{ vars.FLOW_ID_POC_COLLECTOR_BOT_TEST }}",          "file": "AWSConsole/Connect/contact-flows/pwc_poc_collector_bot_test.json"},
-          {"name": "pwc_poc_supervisor_barge_collector_bot","id": "${{ vars.FLOW_ID_SUPERVISOR_BARGE_COLLECTOR_BOT }}", "file": "AWSConsole/Connect/contact-flows/pwc_poc_supervisor_barge_collector_bot.json"}
+          {"name": "pwc_dynamic_navigator",                 "id": "${{ vars.FLOW_ID_DYNAMIC_NAVIGATOR }}",                "file": "Connect/contact-flows/pwc_dynamic_navigator.json"},
+          {"name": "pwc_internal_test_ivr_fidelis",         "id": "${{ vars.FLOW_ID_INTERNAL_TEST_IVR_FIDELIS }}",        "file": "Connect/contact-flows/pwc_internal_test_ivr_fidelis.json"},
+          {"name": "pwc_poc_collector_bot_test",            "id": "${{ vars.FLOW_ID_POC_COLLECTOR_BOT_TEST }}",           "file": "Connect/contact-flows/pwc_poc_collector_bot_test.json"},
+          {"name": "pwc_poc_supervisor_barge_collector_bot", "id": "${{ vars.FLOW_ID_SUPERVISOR_BARGE_COLLECTOR_BOT }}",  "file": "Connect/contact-flows/pwc_poc_supervisor_barge_collector_bot.json"}
         ]
 
   deploy-connect-modules-dev:
@@ -100,7 +120,7 @@ jobs:
       instance-id: ${{ vars.CONNECT_INSTANCE_ID }}
       modules: |
         [
-          {"name": "Send_DTMF", "id": "${{ vars.MODULE_ID_SEND_DTMF }}", "file": "AWSConsole/Connect/modules/Send_DTMF.json"}
+          {"name": "Send DTMF", "id": "${{ vars.MODULE_ID_SEND_DTMF }}", "file": "Connect/modules/Send DTMF.json"}
         ]
 
   deploy-lex-dev:
@@ -121,17 +141,13 @@ jobs:
             "name": "Collector",
             "bot-id": "${{ vars.LEX_BOT_ID_COLLECTOR }}",
             "locale-id": "en_US",
-            "bot-json": "AWSConsole/Lex/Collector/Bot.json",
-            "locale-json": "AWSConsole/Lex/Collector/BotLocales/en_US/BotLocale.json",
-            "intents-dir": "AWSConsole/Lex/Collector/BotLocales/en_US/Intents"
+            "bot-dir": "Lex/Collector"
           },
           {
             "name": "DynamicNavigator",
             "bot-id": "${{ vars.LEX_BOT_ID_DYNAMIC_NAVIGATOR }}",
             "locale-id": "en_US",
-            "bot-json": "AWSConsole/Lex/DynamicNavigator/Bot.json",
-            "locale-json": "AWSConsole/Lex/DynamicNavigator/BotLocales/en_US/BotLocale.json",
-            "intents-dir": "AWSConsole/Lex/DynamicNavigator/BotLocales/en_US/Intents"
+            "bot-dir": "Lex/DynamicNavigator"
           }
         ]
 
@@ -148,10 +164,10 @@ jobs:
       instance-id: ${{ vars.CONNECT_INSTANCE_ID }}
       contact-flows: |
         [
-          {"name": "pwc_dynamic_navigator",                "id": "${{ vars.FLOW_ID_DYNAMIC_NAVIGATOR }}",                "file": "AWSConsole/Connect/contact-flows/pwc_dynamic_navigator.json"},
-          {"name": "pwc_internal_test_ivr_fidelis",        "id": "${{ vars.FLOW_ID_INTERNAL_TEST_IVR_FIDELIS }}",       "file": "AWSConsole/Connect/contact-flows/pwc_internal_test_ivr_fidelis.json"},
-          {"name": "pwc_poc_collector_bot_test",           "id": "${{ vars.FLOW_ID_POC_COLLECTOR_BOT_TEST }}",          "file": "AWSConsole/Connect/contact-flows/pwc_poc_collector_bot_test.json"},
-          {"name": "pwc_poc_supervisor_barge_collector_bot","id": "${{ vars.FLOW_ID_SUPERVISOR_BARGE_COLLECTOR_BOT }}", "file": "AWSConsole/Connect/contact-flows/pwc_poc_supervisor_barge_collector_bot.json"}
+          {"name": "pwc_dynamic_navigator",                 "id": "${{ vars.FLOW_ID_DYNAMIC_NAVIGATOR }}",                "file": "Connect/contact-flows/pwc_dynamic_navigator.json"},
+          {"name": "pwc_internal_test_ivr_fidelis",         "id": "${{ vars.FLOW_ID_INTERNAL_TEST_IVR_FIDELIS }}",        "file": "Connect/contact-flows/pwc_internal_test_ivr_fidelis.json"},
+          {"name": "pwc_poc_collector_bot_test",            "id": "${{ vars.FLOW_ID_POC_COLLECTOR_BOT_TEST }}",           "file": "Connect/contact-flows/pwc_poc_collector_bot_test.json"},
+          {"name": "pwc_poc_supervisor_barge_collector_bot", "id": "${{ vars.FLOW_ID_SUPERVISOR_BARGE_COLLECTOR_BOT }}",  "file": "Connect/contact-flows/pwc_poc_supervisor_barge_collector_bot.json"}
         ]
 
   deploy-connect-modules-qa:
@@ -165,7 +181,7 @@ jobs:
       instance-id: ${{ vars.CONNECT_INSTANCE_ID }}
       modules: |
         [
-          {"name": "Send_DTMF", "id": "${{ vars.MODULE_ID_SEND_DTMF }}", "file": "AWSConsole/Connect/modules/Send_DTMF.json"}
+          {"name": "Send DTMF", "id": "${{ vars.MODULE_ID_SEND_DTMF }}", "file": "Connect/modules/Send DTMF.json"}
         ]
 
   deploy-lex-qa:
@@ -183,17 +199,13 @@ jobs:
             "name": "Collector",
             "bot-id": "${{ vars.LEX_BOT_ID_COLLECTOR }}",
             "locale-id": "en_US",
-            "bot-json": "AWSConsole/Lex/Collector/Bot.json",
-            "locale-json": "AWSConsole/Lex/Collector/BotLocales/en_US/BotLocale.json",
-            "intents-dir": "AWSConsole/Lex/Collector/BotLocales/en_US/Intents"
+            "bot-dir": "Lex/Collector"
           },
           {
             "name": "DynamicNavigator",
             "bot-id": "${{ vars.LEX_BOT_ID_DYNAMIC_NAVIGATOR }}",
             "locale-id": "en_US",
-            "bot-json": "AWSConsole/Lex/DynamicNavigator/Bot.json",
-            "locale-json": "AWSConsole/Lex/DynamicNavigator/BotLocales/en_US/BotLocale.json",
-            "intents-dir": "AWSConsole/Lex/DynamicNavigator/BotLocales/en_US/Intents"
+            "bot-dir": "Lex/DynamicNavigator"
           }
         ]
 
@@ -210,10 +222,10 @@ jobs:
       instance-id: ${{ vars.CONNECT_INSTANCE_ID }}
       contact-flows: |
         [
-          {"name": "pwc_dynamic_navigator",                "id": "${{ vars.FLOW_ID_DYNAMIC_NAVIGATOR }}",                "file": "AWSConsole/Connect/contact-flows/pwc_dynamic_navigator.json"},
-          {"name": "pwc_internal_test_ivr_fidelis",        "id": "${{ vars.FLOW_ID_INTERNAL_TEST_IVR_FIDELIS }}",       "file": "AWSConsole/Connect/contact-flows/pwc_internal_test_ivr_fidelis.json"},
-          {"name": "pwc_poc_collector_bot_test",           "id": "${{ vars.FLOW_ID_POC_COLLECTOR_BOT_TEST }}",          "file": "AWSConsole/Connect/contact-flows/pwc_poc_collector_bot_test.json"},
-          {"name": "pwc_poc_supervisor_barge_collector_bot","id": "${{ vars.FLOW_ID_SUPERVISOR_BARGE_COLLECTOR_BOT }}", "file": "AWSConsole/Connect/contact-flows/pwc_poc_supervisor_barge_collector_bot.json"}
+          {"name": "pwc_dynamic_navigator",                 "id": "${{ vars.FLOW_ID_DYNAMIC_NAVIGATOR }}",                "file": "Connect/contact-flows/pwc_dynamic_navigator.json"},
+          {"name": "pwc_internal_test_ivr_fidelis",         "id": "${{ vars.FLOW_ID_INTERNAL_TEST_IVR_FIDELIS }}",        "file": "Connect/contact-flows/pwc_internal_test_ivr_fidelis.json"},
+          {"name": "pwc_poc_collector_bot_test",            "id": "${{ vars.FLOW_ID_POC_COLLECTOR_BOT_TEST }}",           "file": "Connect/contact-flows/pwc_poc_collector_bot_test.json"},
+          {"name": "pwc_poc_supervisor_barge_collector_bot", "id": "${{ vars.FLOW_ID_SUPERVISOR_BARGE_COLLECTOR_BOT }}",  "file": "Connect/contact-flows/pwc_poc_supervisor_barge_collector_bot.json"}
         ]
 
   deploy-connect-modules-prod:
@@ -227,7 +239,7 @@ jobs:
       instance-id: ${{ vars.CONNECT_INSTANCE_ID }}
       modules: |
         [
-          {"name": "Send_DTMF", "id": "${{ vars.MODULE_ID_SEND_DTMF }}", "file": "AWSConsole/Connect/modules/Send_DTMF.json"}
+          {"name": "Send DTMF", "id": "${{ vars.MODULE_ID_SEND_DTMF }}", "file": "Connect/modules/Send DTMF.json"}
         ]
 
   deploy-lex-prod:
@@ -245,16 +257,12 @@ jobs:
             "name": "Collector",
             "bot-id": "${{ vars.LEX_BOT_ID_COLLECTOR }}",
             "locale-id": "en_US",
-            "bot-json": "AWSConsole/Lex/Collector/Bot.json",
-            "locale-json": "AWSConsole/Lex/Collector/BotLocales/en_US/BotLocale.json",
-            "intents-dir": "AWSConsole/Lex/Collector/BotLocales/en_US/Intents"
+            "bot-dir": "Lex/Collector"
           },
           {
             "name": "DynamicNavigator",
             "bot-id": "${{ vars.LEX_BOT_ID_DYNAMIC_NAVIGATOR }}",
             "locale-id": "en_US",
-            "bot-json": "AWSConsole/Lex/DynamicNavigator/Bot.json",
-            "locale-json": "AWSConsole/Lex/DynamicNavigator/BotLocales/en_US/BotLocale.json",
-            "intents-dir": "AWSConsole/Lex/DynamicNavigator/BotLocales/en_US/Intents"
+            "bot-dir": "Lex/DynamicNavigator"
           }
         ]

@@ -1,5 +1,8 @@
 # Reusable workflow: Deploy Amazon Connect contact flows and modules
 #
+# Deploys contact flow JSON files and contact flow module JSON files
+# to an existing Connect instance via AWS CLI.
+#
 # Usage from application repos:
 #   uses: your-org/shared-workflows/.github/workflows/reusable-deploy-connect.yml@main
 
@@ -24,6 +27,16 @@ on:
         description: "Amazon Connect instance ID"
         required: true
         type: string
+      contact-flows-dir:
+        description: "Path to directory containing contact flow JSON files"
+        required: false
+        type: string
+        default: ""
+      modules-dir:
+        description: "Path to directory containing contact flow module JSON files"
+        required: false
+        type: string
+        default: ""
       contact-flows:
         description: >
           JSON array of contact flows to deploy.
@@ -85,6 +98,57 @@ jobs:
             echo "Successfully deployed: $NAME"
           done
 
+  deploy-contact-flows-dir:
+    name: Deploy contact flows (directory) to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    if: inputs.contact-flows-dir != ''
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Deploy all contact flows from directory
+        env:
+          INSTANCE_ID: ${{ inputs.instance-id }}
+          FLOWS_DIR: ${{ inputs.contact-flows-dir }}
+          REGION: ${{ inputs.aws-region }}
+        run: |
+          echo "Looking up existing contact flows..."
+          EXISTING=$(aws connect list-contact-flows \
+            --instance-id "$INSTANCE_ID" \
+            --region "$REGION" \
+            --query 'ContactFlowSummaryList[].{id:Id,name:Name}' \
+            --output json)
+
+          for flow_file in "$FLOWS_DIR"/*.json; do
+            [ -f "$flow_file" ] || continue
+            FILENAME=$(basename "$flow_file" .json)
+
+            # Try to find flow by filename match
+            FLOW_ID=$(echo "$EXISTING" | jq -r --arg name "$FILENAME" \
+              '.[] | select(.name == $name) | .id // empty')
+
+            if [ -z "$FLOW_ID" ]; then
+              echo "::warning::No matching contact flow found for: $FILENAME (skipping)"
+              continue
+            fi
+
+            echo "Deploying: $FILENAME ($FLOW_ID)"
+            aws connect update-contact-flow-content \
+              --instance-id "$INSTANCE_ID" \
+              --contact-flow-id "$FLOW_ID" \
+              --content file://"$flow_file" \
+              --region "$REGION"
+
+            echo "Successfully deployed: $FILENAME"
+          done
+
   deploy-modules:
     name: Deploy modules to ${{ inputs.environment }}
     runs-on: ubuntu-latest
@@ -124,4 +188,54 @@ jobs:
               --region ${{ inputs.aws-region }}
 
             echo "Successfully deployed: $NAME"
+          done
+
+  deploy-modules-dir:
+    name: Deploy modules (directory) to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    if: inputs.modules-dir != ''
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Deploy all modules from directory
+        env:
+          INSTANCE_ID: ${{ inputs.instance-id }}
+          MODULES_DIR: ${{ inputs.modules-dir }}
+          REGION: ${{ inputs.aws-region }}
+        run: |
+          echo "Looking up existing contact flow modules..."
+          EXISTING=$(aws connect list-contact-flow-modules \
+            --instance-id "$INSTANCE_ID" \
+            --region "$REGION" \
+            --query 'ContactFlowModulesSummaryList[].{id:Id,name:Name}' \
+            --output json)
+
+          for mod_file in "$MODULES_DIR"/*.json; do
+            [ -f "$mod_file" ] || continue
+            FILENAME=$(basename "$mod_file" .json)
+
+            MODULE_ID=$(echo "$EXISTING" | jq -r --arg name "$FILENAME" \
+              '.[] | select(.name == $name) | .id // empty')
+
+            if [ -z "$MODULE_ID" ]; then
+              echo "::warning::No matching module found for: $FILENAME (skipping)"
+              continue
+            fi
+
+            echo "Deploying: $FILENAME ($MODULE_ID)"
+            aws connect update-contact-flow-module-content \
+              --instance-id "$INSTANCE_ID" \
+              --contact-flow-module-id "$MODULE_ID" \
+              --content file://"$mod_file" \
+              --region "$REGION"
+
+            echo "Successfully deployed: $FILENAME"
           done
