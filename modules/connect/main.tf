@@ -31,6 +31,10 @@ resource "aws_connect_contact_flow" "this" {
   content     = each.value.content_file != null ? file(each.value.content_file) : each.value.content
 
   tags = var.tags
+
+  lifecycle {
+    ignore_changes = [content]
+  }
 }
 
 ################################################################################
@@ -46,6 +50,10 @@ resource "aws_connect_contact_flow_module" "this" {
   content     = each.value.content_file != null ? file(each.value.content_file) : each.value.content
 
   tags = var.tags
+
+  lifecycle {
+    ignore_changes = [content]
+  }
 }
 
 ################################################################################
