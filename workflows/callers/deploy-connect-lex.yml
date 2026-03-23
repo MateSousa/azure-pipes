@@ -142,13 +142,15 @@ jobs:
             "bot-id": "${{ vars.LEX_BOT_ID_COLLECTOR }}",
             "locale-id": "en_US",
             "role-arn": "${{ vars.LEX_BOT_ROLE_ARN }}",
-            "bot-dir": "Lex/Collector"
+            "bot-dir": "Lex/Collector",
+            "alias-id": "${{ vars.LEX_ALIAS_ID_COLLECTOR }}"
           },
           {
             "name": "DynamicNavigator",
             "bot-id": "${{ vars.LEX_BOT_ID_DYNAMIC_NAVIGATOR }}",
             "role-arn": "${{ vars.LEX_BOT_ROLE_ARN }}",
-            "bot-dir": "Lex/DynamicNavigator"
+            "bot-dir": "Lex/DynamicNavigator",
+            "alias-id": "${{ vars.LEX_ALIAS_ID_DYNAMIC_NAVIGATOR }}"
           }
         ]
 
@@ -201,13 +203,15 @@ jobs:
             "bot-id": "${{ vars.LEX_BOT_ID_COLLECTOR }}",
             "locale-id": "en_US",
             "role-arn": "${{ vars.LEX_BOT_ROLE_ARN }}",
-            "bot-dir": "Lex/Collector"
+            "bot-dir": "Lex/Collector",
+            "alias-id": "${{ vars.LEX_ALIAS_ID_COLLECTOR }}"
           },
           {
             "name": "DynamicNavigator",
             "bot-id": "${{ vars.LEX_BOT_ID_DYNAMIC_NAVIGATOR }}",
             "role-arn": "${{ vars.LEX_BOT_ROLE_ARN }}",
-            "bot-dir": "Lex/DynamicNavigator"
+            "bot-dir": "Lex/DynamicNavigator",
+            "alias-id": "${{ vars.LEX_ALIAS_ID_DYNAMIC_NAVIGATOR }}"
           }
         ]
 
@@ -260,12 +264,14 @@ jobs:
             "bot-id": "${{ vars.LEX_BOT_ID_COLLECTOR }}",
             "locale-id": "en_US",
             "role-arn": "${{ vars.LEX_BOT_ROLE_ARN }}",
-            "bot-dir": "Lex/Collector"
+            "bot-dir": "Lex/Collector",
+            "alias-id": "${{ vars.LEX_ALIAS_ID_COLLECTOR }}"
           },
           {
             "name": "DynamicNavigator",
             "bot-id": "${{ vars.LEX_BOT_ID_DYNAMIC_NAVIGATOR }}",
             "role-arn": "${{ vars.LEX_BOT_ROLE_ARN }}",
-            "bot-dir": "Lex/DynamicNavigator"
+            "bot-dir": "Lex/DynamicNavigator",
+            "alias-id": "${{ vars.LEX_ALIAS_ID_DYNAMIC_NAVIGATOR }}"
           }
         ]

@@ -38,7 +38,7 @@ on:
       bots:
         description: >
           JSON array of Lex bots to deploy.
-          Each entry: {"name": "BotName", "bot-id": "BOT_ID", "role-arn": "arn:aws:iam::...", "bot-dir": "Lex/BotName"}
+          Each entry: {"name": "BotName", "bot-id": "BOT_ID", "role-arn": "arn:aws:iam::...", "bot-dir": "Lex/BotName", "alias-id": "ALIAS_ID"}
         required: true
         type: string
       auto-build:
@@ -178,6 +178,59 @@ jobs:
               done
             fi
 
-            echo "Successfully deployed: $NAME"
+            # Create a new bot version from DRAFT
+            echo "Creating new bot version..."
+            VERSION_RESPONSE=$(aws lexv2-models create-bot-version \
+              --bot-id "$BOT_ID" \
+              --bot-version-locale-specification "{
+                $(echo "$LOCALE_IDS" | jq -r '[.[] | "\"" + . + "\": {\"sourceBotVersion\": \"DRAFT\"}"] | join(",")')
+              }" \
+              --region "$REGION")
+
+            NEW_VERSION=$(echo "$VERSION_RESPONSE" | jq -r '.botVersion')
+            echo "Created bot version: $NEW_VERSION"
+
+            # Wait for version to be available
+            echo "Waiting for version to be available..."
+            while true; do
+              VERSION_STATUS=$(aws lexv2-models describe-bot-version \
+                --bot-id "$BOT_ID" \
+                --bot-version "$NEW_VERSION" \
+                --region "$REGION" \
+                --query 'botStatus' --output text)
+
+              echo "  Version status: $VERSION_STATUS"
+
+              if [ "$VERSION_STATUS" = "Available" ]; then
+                echo "Version $NEW_VERSION is available"
+                break
+              elif [ "$VERSION_STATUS" = "Failed" ]; then
+                echo "::error::Bot version creation failed for $NAME"
+                exit 1
+              fi
+
+              sleep 5
+            done
+
+            # Update bot alias to point to the new version
+            ALIAS_ID=$(echo "$bot" | jq -r '.["alias-id"] // empty')
+            if [ -n "$ALIAS_ID" ]; then
+              echo "Updating alias $ALIAS_ID to version $NEW_VERSION..."
+              aws lexv2-models update-bot-alias \
+                --bot-id "$BOT_ID" \
+                --bot-alias-id "$ALIAS_ID" \
+                --bot-alias-name "$(aws lexv2-models describe-bot-alias \
+                  --bot-id "$BOT_ID" \
+                  --bot-alias-id "$ALIAS_ID" \
+                  --region "$REGION" \
+                  --query 'botAliasName' --output text)" \
+                --bot-version "$NEW_VERSION" \
+                --region "$REGION"
+              echo "Alias updated to version $NEW_VERSION"
+            else
+              echo "No alias-id provided, skipping alias update"
+            fi
+
+            echo "Successfully deployed: $NAME (version $NEW_VERSION)"
             rm -f "$ZIP_FILE"
           done
