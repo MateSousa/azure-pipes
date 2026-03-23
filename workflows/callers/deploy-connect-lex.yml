@@ -141,12 +141,13 @@ jobs:
             "name": "Collector",
             "bot-id": "${{ vars.LEX_BOT_ID_COLLECTOR }}",
             "locale-id": "en_US",
+            "role-arn": "${{ vars.LEX_BOT_ROLE_ARN }}",
             "bot-dir": "Lex/Collector"
           },
           {
             "name": "DynamicNavigator",
             "bot-id": "${{ vars.LEX_BOT_ID_DYNAMIC_NAVIGATOR }}",
-            "locale-id": "en_US",
+            "role-arn": "${{ vars.LEX_BOT_ROLE_ARN }}",
             "bot-dir": "Lex/DynamicNavigator"
           }
         ]
@@ -199,12 +200,13 @@ jobs:
             "name": "Collector",
             "bot-id": "${{ vars.LEX_BOT_ID_COLLECTOR }}",
             "locale-id": "en_US",
+            "role-arn": "${{ vars.LEX_BOT_ROLE_ARN }}",
             "bot-dir": "Lex/Collector"
           },
           {
             "name": "DynamicNavigator",
             "bot-id": "${{ vars.LEX_BOT_ID_DYNAMIC_NAVIGATOR }}",
-            "locale-id": "en_US",
+            "role-arn": "${{ vars.LEX_BOT_ROLE_ARN }}",
             "bot-dir": "Lex/DynamicNavigator"
           }
         ]
@@ -257,12 +259,13 @@ jobs:
             "name": "Collector",
             "bot-id": "${{ vars.LEX_BOT_ID_COLLECTOR }}",
             "locale-id": "en_US",
+            "role-arn": "${{ vars.LEX_BOT_ROLE_ARN }}",
             "bot-dir": "Lex/Collector"
           },
           {
             "name": "DynamicNavigator",
             "bot-id": "${{ vars.LEX_BOT_ID_DYNAMIC_NAVIGATOR }}",
-            "locale-id": "en_US",
+            "role-arn": "${{ vars.LEX_BOT_ROLE_ARN }}",
             "bot-dir": "Lex/DynamicNavigator"
           }
         ]
