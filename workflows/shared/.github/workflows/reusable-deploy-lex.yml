@@ -82,9 +82,11 @@ jobs:
             echo "Deploying Lex bot: $NAME ($BOT_ID)"
             echo "========================================="
 
-            # Zip the bot directory (console export format)
+            # Zip the bot directory — top-level folder must match bot name
             ZIP_FILE="/tmp/${NAME}-bot.zip"
-            (cd "$BOT_DIR" && zip -r "$ZIP_FILE" .)
+            PARENT_DIR=$(dirname "$BOT_DIR")
+            FOLDER_NAME=$(basename "$BOT_DIR")
+            (cd "$PARENT_DIR" && zip -r "$ZIP_FILE" "$FOLDER_NAME")
             echo "Created zip: $ZIP_FILE ($(du -h "$ZIP_FILE" | cut -f1))"
 
             # Get upload URL
