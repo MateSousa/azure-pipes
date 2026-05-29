@@ -1,0 +1,20 @@
+# Caller workflow: PR Review Agent
+# Place this in the application repo at .github/workflows/ci-pr-review.yml
+
+name: PR Review Agent
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [development]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    uses: your-org/shared-workflows/.github/workflows/reusable-ci-pr-review.yml@main
+    with:
+      runs-on: ubuntu-latest-4-cores
+    secrets: inherit

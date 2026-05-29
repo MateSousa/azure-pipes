@@ -1,0 +1,20 @@
+# Caller workflow: Schema Drift Detector
+# Place this in the application repo at .github/workflows/ci-schema-drift-detector.yml
+
+name: Schema Drift Detector
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Every Monday at 9am UTC
+  workflow_dispatch:     # Also runnable manually
+
+permissions:
+  contents: read
+
+jobs:
+  detect-drift:
+    uses: your-org/shared-workflows/.github/workflows/reusable-ci-schema-drift-detector.yml@main
+    with:
+      jira-project: RQ
+      runs-on: ubuntu-latest-4-cores
+    secrets: inherit

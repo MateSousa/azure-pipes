@@ -1,0 +1,159 @@
+# Reusable workflow: Acceptance Criteria Checker
+#
+# Verifies that PRs:
+#   1) include a Jira ticket key in the title (e.g. [APP-924])
+#   2) satisfy the acceptance criteria fetched from that Jira ticket
+#      (uses an AWS Bedrock-backed agent script at <agents-path>/acceptance-criteria-checker.mjs)
+#
+# Usage from application repos:
+#   uses: your-org/shared-workflows/.github/workflows/reusable-ci-acceptance-criteria-checker.yml@main
+
+name: Acceptance Criteria Checker
+
+on:
+  workflow_call:
+    inputs:
+      ticket-prefix:
+        description: "Jira project key prefix matched in PR titles (extracts [PREFIX-NNN])"
+        required: false
+        type: string
+        default: "APP"
+      jira-base-url:
+        description: "Jira base URL (used for the agent and the result comment link)"
+        required: false
+        type: string
+        default: "https://your-org.atlassian.net"
+      jira-inherit-ac-from-parent:
+        description: "When the subtask has no AC, walk up to the parent ticket. See APP-1218."
+        required: false
+        type: string
+        default: "true"
+      aws-region:
+        description: "AWS region for Bedrock"
+        required: false
+        type: string
+        default: "us-east-1"
+      node-version:
+        description: "Node.js version"
+        required: false
+        type: string
+        default: "20"
+      agents-path:
+        description: "Path to the directory holding acceptance-criteria-checker.mjs and its package.json"
+        required: false
+        type: string
+        default: "agents"
+      runs-on:
+        description: "Runner label for both jobs"
+        required: false
+        type: string
+        default: "ubuntu-latest"
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      AWS_SESSION_TOKEN:
+        required: true
+      BEDROCK_MODEL_ID:
+        required: true
+      JIRA_USERNAME:
+        required: true
+      JIRA_API_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check-title:
+    name: Check PR title for Jira ticket key
+    runs-on: ${{ inputs.runs-on }}
+    outputs:
+      ticket_key: ${{ steps.extract.outputs.TICKET_KEY }}
+    steps:
+      - name: Extract Jira ticket key from PR title
+        id: extract
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          PREFIX: ${{ inputs.ticket-prefix }}
+        run: |
+          KEY=$(echo "$TITLE" | grep -oE "\[${PREFIX}-[0-9]+\]" | head -1 | tr -d '[]')
+          if [ -z "$KEY" ]; then
+            echo "::error::PR title must include a Jira ticket key in the format [${PREFIX}-XXX]."
+            echo "Example: [${PREFIX}-924] feat: employee directory search"
+            exit 1
+          fi
+          echo "Found ticket key: $KEY"
+          echo "TICKET_KEY=$KEY" >> "$GITHUB_OUTPUT"
+
+  check-ac:
+    name: Check acceptance criteria
+    needs: check-title
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Install agent dependencies
+        run: npm install
+        working-directory: ${{ inputs.agents-path }}
+
+      - name: Get PR diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr diff ${{ github.event.pull_request.number }} > /tmp/pr.diff
+
+      - name: Run acceptance criteria checker
+        id: ac
+        env:
+          BEDROCK_MODEL_ID: ${{ secrets.BEDROCK_MODEL_ID }}
+          JIRA_URL: ${{ inputs.jira-base-url }}
+          JIRA_USERNAME: ${{ secrets.JIRA_USERNAME }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_TICKET_KEY: ${{ needs.check-title.outputs.ticket_key }}
+          JIRA_INHERIT_AC_FROM_PARENT: ${{ inputs.jira-inherit-ac-from-parent }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_DIFF_FILE: /tmp/pr.diff
+        run: |
+          set +e
+          node "${{ inputs.agents-path }}/acceptance-criteria-checker.mjs" > /tmp/ac.txt
+          echo $? > /tmp/ac_exit.txt
+
+      - name: Post AC result
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JIRA_BASE_URL: ${{ inputs.jira-base-url }}
+          TICKET: ${{ needs.check-title.outputs.ticket_key }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          EXIT_CODE=$(cat /tmp/ac_exit.txt)
+          if [ "$EXIT_CODE" = "0" ]; then
+            STATUS="✅ AC PASS"
+          else
+            STATUS="❌ AC INCOMPLETE"
+          fi
+          {
+            echo "## Acceptance Criteria Checker — $STATUS"
+            echo ""
+            echo "**Linked ticket:** [$TICKET](${JIRA_BASE_URL}/browse/$TICKET)"
+            echo ""
+            cat /tmp/ac.txt
+            echo ""
+            echo "---"
+            echo "*Fetches acceptance criteria from the linked Jira ticket and checks each item against the PR diff.*"
+          } > /tmp/comment.txt
+          gh pr comment "$PR_NUMBER" --body-file /tmp/comment.txt
+          exit "$EXIT_CODE"

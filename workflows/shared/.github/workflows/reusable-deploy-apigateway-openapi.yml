@@ -1,0 +1,196 @@
+# Reusable workflow: Reimport an OpenAPI schema into an existing HTTP API v2.
+#
+# The HTTP API itself (and its stage, VPC link, authorizer, Lambda invoke
+# permissions) is provisioned by Terraform via modules/api-gateway. Routes and
+# integrations are NOT in Terraform — they live in the OpenAPI document in the
+# API code repo and are deployed here through `aws apigatewayv2 reimport-api`.
+#
+# OpenAPI authoring notes:
+#   Each operation needs an `x-amazon-apigateway-integration` block, e.g.:
+#
+#     Lambda (AWS_PROXY)
+#       x-amazon-apigateway-integration:
+#         type: aws_proxy
+#         httpMethod: POST
+#         payloadFormatVersion: '2.0'
+#         uri: ${LAMBDA_GET_USER_INVOKE_ARN}
+#
+#     ALB via VPC Link (HTTP_PROXY)
+#       x-amazon-apigateway-integration:
+#         type: http_proxy
+#         httpMethod: ANY
+#         uri: ${BACKEND_ALB_LISTENER_ARN}
+#         connectionType: VPC_LINK
+#         connectionId: ${VPC_LINK_ID}
+#
+#   Pass ARNs / IDs through the `openapi-substitutions` input as KEY=VALUE
+#   pairs (one per line). The workflow renders the spec with envsubst before
+#   reimporting and fails if any `${...}` placeholders are left unresolved.
+#
+#   Every Lambda referenced from an aws_proxy integration must appear in the
+#   API Gateway Terraform module's `invokable_lambdas` list — that's where the
+#   `lambda:InvokeFunction` permission is granted.
+#
+# Usage from application repos:
+#   uses: your-org/shared-workflows/.github/workflows/reusable-deploy-apigateway-openapi.yml@main
+
+name: Deploy API Gateway OpenAPI
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment name (dev, cp, prod)"
+        required: true
+        type: string
+      aws-role-arn:
+        description: "IAM role ARN for OIDC assume-role"
+        required: true
+        type: string
+      aws-region:
+        description: "AWS region"
+        required: true
+        type: string
+      api-id:
+        description: "HTTP API v2 ID (apigatewayv2 ApiId) to reimport into"
+        required: true
+        type: string
+      openapi-file:
+        description: "Path to the OpenAPI YAML/JSON file, relative to repo root"
+        required: true
+        type: string
+      openapi-substitutions:
+        description: "Optional KEY=VALUE pairs (one per line) substituted into the OpenAPI file via envsubst before reimport"
+        required: false
+        type: string
+        default: ""
+      fail-on-warnings:
+        description: "Fail the reimport if AWS returns warnings about the spec"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  validate:
+    name: Validate inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check environment name
+        run: |
+          if [[ ! "${{ inputs.environment }}" =~ ^(dev|cp|prod)$ ]]; then
+            echo "::error::Invalid environment '${{ inputs.environment }}'. Must be one of: dev, cp, prod"
+            exit 1
+          fi
+
+  deploy:
+    name: Reimport OpenAPI to API ${{ inputs.api-id }} (${{ inputs.environment }})
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Confirm OpenAPI file exists
+        run: |
+          if [ ! -f "${{ inputs.openapi-file }}" ]; then
+            echo "::error::OpenAPI file not found at '${{ inputs.openapi-file }}'"
+            exit 1
+          fi
+
+      - name: Render OpenAPI with envsubst
+        id: render
+        env:
+          OPENAPI_SUBSTITUTIONS: ${{ inputs.openapi-substitutions }}
+        run: |
+          INPUT="${{ inputs.openapi-file }}"
+          RENDERED="${RUNNER_TEMP}/openapi.rendered.yaml"
+          if [ -z "${OPENAPI_SUBSTITUTIONS//[[:space:]]/}" ]; then
+            cp "$INPUT" "$RENDERED"
+            echo "No substitutions provided — using OpenAPI file as-is."
+          else
+            ALLOWLIST=""
+            while IFS= read -r line; do
+              line="${line#"${line%%[![:space:]]*}"}"
+              [ -z "$line" ] && continue
+              if [[ "$line" != *=* ]]; then
+                echo "::error::openapi-substitutions line is not KEY=VALUE: '$line'"
+                exit 1
+              fi
+              key="${line%%=*}"
+              export "$line"
+              ALLOWLIST="${ALLOWLIST}\${${key}} "
+            done <<< "$OPENAPI_SUBSTITUTIONS"
+            # Restrict envsubst to ONLY the provided keys so API Gateway
+            # mapping expressions ($request.*, $context.*, $stageVariables.*)
+            # are left intact instead of being clobbered to empty.
+            envsubst "$ALLOWLIST" < "$INPUT" > "$RENDERED"
+            echo "Rendered $INPUT with substitutions (allowlist: $ALLOWLIST)."
+          fi
+          echo "rendered=$RENDERED" >> "$GITHUB_OUTPUT"
+
+      - name: Sanity check rendered spec
+        run: |
+          RENDERED="${{ steps.render.outputs.rendered }}"
+          if ! grep -qE '^(openapi|swagger)[[:space:]]*:' "$RENDERED"; then
+            echo "::error::Rendered OpenAPI is missing a top-level 'openapi:' or 'swagger:' key"
+            exit 1
+          fi
+          if ! grep -qE '^paths[[:space:]]*:' "$RENDERED"; then
+            echo "::error::Rendered OpenAPI is missing a top-level 'paths:' key"
+            exit 1
+          fi
+          if grep -qE '\$\{[A-Za-z0-9_]+\}' "$RENDERED"; then
+            echo "::error::Rendered OpenAPI still contains unresolved \${...} placeholders:"
+            grep -nE '\$\{[A-Za-z0-9_]+\}' "$RENDERED" | head -20
+            echo "::error::Add the missing keys to openapi-substitutions."
+            exit 1
+          fi
+
+      - name: Print rendered spec
+        run: |
+          RENDERED="${{ steps.render.outputs.rendered }}"
+          echo "----- BEGIN rendered OpenAPI (${RENDERED}) -----"
+          cat -n "$RENDERED"
+          echo "----- END rendered OpenAPI -----"
+
+      - name: Reimport OpenAPI into API Gateway
+        run: |
+          RENDERED="${{ steps.render.outputs.rendered }}"
+          if [ "${{ inputs.fail-on-warnings }}" = "true" ]; then
+            FAIL_FLAG="--fail-on-warnings"
+          else
+            FAIL_FLAG="--no-fail-on-warnings"
+          fi
+          aws apigatewayv2 reimport-api \
+            --api-id "${{ inputs.api-id }}" \
+            --body "file://$RENDERED" \
+            $FAIL_FLAG \
+            --region "${{ inputs.aws-region }}"
+          echo "Reimported OpenAPI into API ${{ inputs.api-id }}."
+
+      - name: Confirm new API state
+        run: |
+          echo "API metadata:"
+          aws apigatewayv2 get-api \
+            --api-id "${{ inputs.api-id }}" \
+            --region "${{ inputs.aws-region }}" \
+            --query '{ApiId: ApiId, Name: Name, ApiEndpoint: ApiEndpoint, Version: Version}' \
+            --output table
+
+          echo "Routes after reimport:"
+          aws apigatewayv2 get-routes \
+            --api-id "${{ inputs.api-id }}" \
+            --region "${{ inputs.aws-region }}" \
+            --query 'Items[*].{RouteKey: RouteKey, Target: Target, AuthorizationType: AuthorizationType}' \
+            --output table

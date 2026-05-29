@@ -1,0 +1,248 @@
+# Reusable workflow: Deploy Amazon Lex V2 bots
+#
+# Deploys Lex bot definitions using the import API, which accepts
+# the same JSON format exported from the Lex console.
+#
+# Expected directory structure per bot:
+#   BotName/
+#     Bot.json
+#     BotLocales/
+#       en_US/
+#         BotLocale.json
+#         Intents/
+#           FallbackIntent/
+#             Intent.json
+#           MyIntent/
+#             Intent.json
+#
+# Usage from application repos:
+#   uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lex.yml@main
+
+name: Deploy Lex Bot
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment name (dev, cp, prod)"
+        required: true
+        type: string
+      aws-role-arn:
+        description: "IAM role ARN for OIDC assume-role"
+        required: true
+        type: string
+      aws-region:
+        description: "AWS region"
+        required: true
+        type: string
+      bots:
+        description: >
+          JSON array of Lex bots to deploy.
+          Each entry: {"name": "BotName", "bot-id": "BOT_ID", "role-arn": "arn:aws:iam::...", "bot-dir": "Lex/BotName", "alias-id": "ALIAS_ID"}
+        required: true
+        type: string
+      auto-build:
+        description: "Automatically build the bot locale after importing"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  validate:
+    name: Validate inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check environment name
+        run: |
+          if [[ ! "${{ inputs.environment }}" =~ ^(dev|cp|prod)$ ]]; then
+            echo "::error::Invalid environment '${{ inputs.environment }}'. Must be one of: dev, cp, prod"
+            exit 1
+          fi
+
+  deploy:
+    name: Deploy Lex bots to ${{ inputs.environment }}
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Deploy Lex bots via import
+        env:
+          BOTS: ${{ inputs.bots }}
+          AUTO_BUILD: ${{ inputs.auto-build }}
+          REGION: ${{ inputs.aws-region }}
+        run: |
+          echo "$BOTS" | jq -c '.[]' | while read -r bot; do
+            NAME=$(echo "$bot" | jq -r '.name')
+            BOT_ID=$(echo "$bot" | jq -r '.["bot-id"]')
+            ROLE_ARN=$(echo "$bot" | jq -r '.["role-arn"]')
+            BOT_DIR=$(echo "$bot" | jq -r '.["bot-dir"]')
+
+            echo "========================================="
+            echo "Deploying Lex bot: $NAME ($BOT_ID)"
+            echo "========================================="
+
+            # Zip the bot directory — must include Manifest.json + BotName/ folder
+            ZIP_FILE="/tmp/${NAME}-bot.zip"
+            (cd "$BOT_DIR" && zip -r "$ZIP_FILE" .)
+            echo "Created zip: $ZIP_FILE ($(du -h "$ZIP_FILE" | cut -f1))"
+
+            # Get upload URL
+            echo "Getting upload URL..."
+            UPLOAD_RESPONSE=$(aws lexv2-models create-upload-url --region "$REGION")
+            IMPORT_ID=$(echo "$UPLOAD_RESPONSE" | jq -r '.importId')
+            UPLOAD_URL=$(echo "$UPLOAD_RESPONSE" | jq -r '.uploadUrl')
+
+            echo "Import ID: $IMPORT_ID"
+
+            # Upload the zip
+            echo "Uploading bot definition..."
+            curl -s -T "$ZIP_FILE" "$UPLOAD_URL"
+
+            # Start import
+            echo "Starting import..."
+            aws lexv2-models start-import \
+              --import-id "$IMPORT_ID" \
+              --merge-strategy "Overwrite" \
+              --resource-specification "{
+                \"botImportSpecification\": {
+                  \"botName\": \"$NAME\",
+                  \"roleArn\": \"$ROLE_ARN\",
+                  \"dataPrivacy\": {\"childDirected\": false}
+                }
+              }" \
+              --region "$REGION"
+
+            # Wait for import to complete
+            echo "Waiting for import to complete..."
+            while true; do
+              IMPORT_STATUS=$(aws lexv2-models describe-import \
+                --import-id "$IMPORT_ID" \
+                --region "$REGION" \
+                --query 'importStatus' --output text)
+
+              echo "  Import status: $IMPORT_STATUS"
+
+              if [ "$IMPORT_STATUS" = "Completed" ]; then
+                echo "Import completed successfully"
+                break
+              elif [ "$IMPORT_STATUS" = "Failed" ]; then
+                echo "::error::Import failed for $NAME"
+                aws lexv2-models describe-import \
+                  --import-id "$IMPORT_ID" \
+                  --region "$REGION"
+                exit 1
+              fi
+
+              sleep 5
+            done
+
+            # Build bot locale
+            if [ "$AUTO_BUILD" = "true" ]; then
+              # Get locale IDs from the bot
+              LOCALE_IDS=$(aws lexv2-models list-bot-locales \
+                --bot-id "$BOT_ID" \
+                --bot-version "DRAFT" \
+                --region "$REGION" \
+                --query 'botLocaleSummaries[].localeId' --output json)
+
+              echo "$LOCALE_IDS" | jq -r '.[]' | while read -r LOCALE_ID; do
+                echo "Building bot locale: $LOCALE_ID..."
+                aws lexv2-models build-bot-locale \
+                  --bot-id "$BOT_ID" \
+                  --bot-version "DRAFT" \
+                  --locale-id "$LOCALE_ID" \
+                  --region "$REGION"
+
+                echo "Waiting for build to complete..."
+                while true; do
+                  STATUS=$(aws lexv2-models describe-bot-locale \
+                    --bot-id "$BOT_ID" \
+                    --bot-version "DRAFT" \
+                    --locale-id "$LOCALE_ID" \
+                    --region "$REGION" \
+                    --query 'botLocaleStatus' --output text)
+
+                  echo "  Build status ($LOCALE_ID): $STATUS"
+
+                  if [ "$STATUS" = "Built" ] || [ "$STATUS" = "ReadyExpressTesting" ]; then
+                    echo "Build completed for $LOCALE_ID"
+                    break
+                  elif [ "$STATUS" = "Failed" ]; then
+                    echo "::error::Bot locale build failed for $NAME ($LOCALE_ID)"
+                    exit 1
+                  fi
+
+                  sleep 10
+                done
+              done
+            fi
+
+            # Create a new bot version from DRAFT
+            echo "Creating new bot version..."
+            VERSION_RESPONSE=$(aws lexv2-models create-bot-version \
+              --bot-id "$BOT_ID" \
+              --bot-version-locale-specification "{
+                $(echo "$LOCALE_IDS" | jq -r '[.[] | "\"" + . + "\": {\"sourceBotVersion\": \"DRAFT\"}"] | join(",")')
+              }" \
+              --region "$REGION")
+
+            NEW_VERSION=$(echo "$VERSION_RESPONSE" | jq -r '.botVersion')
+            echo "Created bot version: $NEW_VERSION"
+
+            # Wait for version to be available
+            echo "Waiting for version to be available..."
+            while true; do
+              VERSION_STATUS=$(aws lexv2-models describe-bot-version \
+                --bot-id "$BOT_ID" \
+                --bot-version "$NEW_VERSION" \
+                --region "$REGION" \
+                --query 'botStatus' --output text)
+
+              echo "  Version status: $VERSION_STATUS"
+
+              if [ "$VERSION_STATUS" = "Available" ]; then
+                echo "Version $NEW_VERSION is available"
+                break
+              elif [ "$VERSION_STATUS" = "Failed" ]; then
+                echo "::error::Bot version creation failed for $NAME"
+                exit 1
+              fi
+
+              sleep 5
+            done
+
+            # Update bot alias to point to the new version
+            ALIAS_ID=$(echo "$bot" | jq -r '.["alias-id"] // empty')
+            if [ -n "$ALIAS_ID" ]; then
+              echo "Updating alias $ALIAS_ID to version $NEW_VERSION..."
+              aws lexv2-models update-bot-alias \
+                --bot-id "$BOT_ID" \
+                --bot-alias-id "$ALIAS_ID" \
+                --bot-alias-name "$(aws lexv2-models describe-bot-alias \
+                  --bot-id "$BOT_ID" \
+                  --bot-alias-id "$ALIAS_ID" \
+                  --region "$REGION" \
+                  --query 'botAliasName' --output text)" \
+                --bot-version "$NEW_VERSION" \
+                --region "$REGION"
+              echo "Alias updated to version $NEW_VERSION"
+            else
+              echo "No alias-id provided, skipping alias update"
+            fi
+
+            echo "Successfully deployed: $NAME (version $NEW_VERSION)"
+            rm -f "$ZIP_FILE"
+          done

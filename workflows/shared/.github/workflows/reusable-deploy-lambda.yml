@@ -1,0 +1,213 @@
+# Reusable workflow: Package and deploy a Lambda function
+#
+# Usage from application repos:
+#   uses: your-org/shared-workflows/.github/workflows/reusable-deploy-lambda.yml@main
+
+name: Deploy Lambda
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment name (dev, cp, prod)"
+        required: true
+        type: string
+      aws-role-arn:
+        description: "IAM role ARN for OIDC assume-role"
+        required: true
+        type: string
+      aws-region:
+        description: "AWS region"
+        required: true
+        type: string
+      function-name:
+        description: "Lambda function name in AWS"
+        required: true
+        type: string
+      source-path:
+        description: "Path to the Lambda source directory (e.g. AWSConsole/Connect/Lambda/my-function/src)"
+        required: true
+        type: string
+      runtime:
+        description: "Lambda runtime (python3.12, nodejs20.x, etc.)"
+        required: false
+        type: string
+        default: "python3.12"
+      install-deps:
+        description: "Install dependencies before packaging (runs pip install or npm install into the bundle)"
+        required: false
+        type: boolean
+        default: false
+      requirements-file:
+        description: "Path to requirements.txt (relative to source-path, Python only)"
+        required: false
+        type: string
+        default: "requirements.txt"
+      publish-version:
+        description: "Publish a new Lambda version after deploy"
+        required: false
+        type: boolean
+        default: false
+      alias:
+        description: "Lambda alias to point to the new version (requires publish-version: true)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  validate:
+    name: Validate inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check environment name
+        run: |
+          if [[ ! "${{ inputs.environment }}" =~ ^(dev|cp|prod)$ ]]; then
+            echo "::error::Invalid environment '${{ inputs.environment }}'. Must be one of: dev, cp, prod"
+            exit 1
+          fi
+
+  deploy:
+    name: Deploy ${{ inputs.function-name }} to ${{ inputs.environment }}
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Setup Python
+        if: startsWith(inputs.runtime, 'python')
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node.js
+        if: startsWith(inputs.runtime, 'nodejs')
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install Python dependencies
+        if: startsWith(inputs.runtime, 'python') && inputs.install-deps
+        run: |
+          REQ_FILE="${{ inputs.source-path }}/${{ inputs.requirements-file }}"
+          if [ -f "$REQ_FILE" ]; then
+            pip install -r "$REQ_FILE" -t "${{ inputs.source-path }}/"
+            echo "Installed Python dependencies from $REQ_FILE"
+          else
+            echo "No requirements file found at $REQ_FILE — skipping"
+          fi
+
+      - name: Install Node.js dependencies
+        if: startsWith(inputs.runtime, 'nodejs') && inputs.install-deps
+        working-directory: ${{ inputs.source-path }}
+        run: |
+          if [ ! -f "package.json" ]; then
+            echo "No package.json found — skipping"
+            exit 0
+          fi
+          if [ -f "tsconfig.json" ]; then
+            npm ci
+            echo "Installed Node.js dependencies (including dev — needed for TypeScript build)"
+          else
+            npm ci --omit=dev
+            echo "Installed Node.js production dependencies"
+          fi
+
+      - name: Build TypeScript (esbuild bundle)
+        if: startsWith(inputs.runtime, 'nodejs')
+        id: ts-build
+        working-directory: ${{ inputs.source-path }}
+        run: |
+          if [ ! -f "tsconfig.json" ]; then
+            echo "No tsconfig.json in source-path — skipping TypeScript build"
+            echo "built=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ENTRY="src/index.ts"
+          [ -f "$ENTRY" ] || ENTRY="index.ts"
+          if [ ! -f "$ENTRY" ]; then
+            echo "::error::Found tsconfig.json but no src/index.ts or index.ts in ${{ inputs.source-path }}"
+            exit 1
+          fi
+          if [ -f "package.json" ] && [ ! -d "node_modules" ]; then
+            npm ci
+          fi
+          RUNTIME="${{ inputs.runtime }}"
+          TARGET_NODE="${RUNTIME#nodejs}"
+          TARGET_NODE="${TARGET_NODE%.x}"
+          npx --yes esbuild "$ENTRY" \
+            --bundle \
+            --platform=node \
+            --target="node${TARGET_NODE}" \
+            --format=esm \
+            --outfile=dist/index.mjs \
+            --external:@aws-sdk/* \
+            --banner:js="import { createRequire } from 'module'; const require = createRequire(import.meta.url);"
+          echo "Built dist/index.mjs (target node${TARGET_NODE}, AWS SDK left external)"
+          echo "built=true" >> "$GITHUB_OUTPUT"
+
+      - name: Package Lambda
+        run: |
+          if [ "${{ steps.ts-build.outputs.built }}" = "true" ]; then
+            PACKAGE_DIR="${{ inputs.source-path }}/dist"
+            echo "Packaging from TypeScript build output: $PACKAGE_DIR"
+          else
+            PACKAGE_DIR="${{ inputs.source-path }}"
+          fi
+          cd "$PACKAGE_DIR"
+          zip -r "${GITHUB_WORKSPACE}/lambda-package.zip" . -x '*.pyc' '__pycache__/*' 'node_modules/.cache/*' '*.md' 'tests/*' '*backup*' '*copy*'
+          cd "${GITHUB_WORKSPACE}"
+          echo "Package size: $(du -sh lambda-package.zip | cut -f1)"
+
+      - name: Deploy Lambda function
+        run: |
+          aws lambda update-function-code \
+            --function-name "${{ inputs.function-name }}" \
+            --zip-file fileb://lambda-package.zip \
+            --region ${{ inputs.aws-region }}
+
+          echo "Waiting for function update to complete..."
+          aws lambda wait function-updated-v2 \
+            --function-name "${{ inputs.function-name }}" \
+            --region ${{ inputs.aws-region }}
+
+          echo "Successfully deployed ${{ inputs.function-name }}"
+
+      - name: Publish version
+        if: inputs.publish-version
+        id: publish
+        run: |
+          VERSION=$(aws lambda publish-version \
+            --function-name "${{ inputs.function-name }}" \
+            --region ${{ inputs.aws-region }} \
+            --query 'Version' --output text)
+          echo "Published version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Update alias
+        if: inputs.publish-version && inputs.alias != ''
+        run: |
+          # Create or update the alias
+          aws lambda update-alias \
+            --function-name "${{ inputs.function-name }}" \
+            --name "${{ inputs.alias }}" \
+            --function-version "${{ steps.publish.outputs.version }}" \
+            --region ${{ inputs.aws-region }} 2>/dev/null \
+          || aws lambda create-alias \
+            --function-name "${{ inputs.function-name }}" \
+            --name "${{ inputs.alias }}" \
+            --function-version "${{ steps.publish.outputs.version }}" \
+            --region ${{ inputs.aws-region }}
+
+          echo "Alias '${{ inputs.alias }}' now points to version ${{ steps.publish.outputs.version }}"

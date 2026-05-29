@@ -1,0 +1,114 @@
+# Terraform infrastructure pipeline
+#
+# Deploys the outbound-calling-app infrastructure via Terraform.
+# Flow: validate → dev → qa → prod
+#
+# Dev deploys automatically on push to main.
+# QA and Prod require manual approval via GitHub Environment
+# protection rules.
+#
+# GitHub Environment Setup (manual):
+#   Settings → Environments → Create "dev-plan"  (no protection)
+#   Settings → Environments → Create "dev"       (no protection, or add reviewers)
+#   Settings → Environments → Create "qa-plan"   (no protection)
+#   Settings → Environments → Create "qa"        → Add required reviewers
+#   Settings → Environments → Create "prod-plan" (no protection)
+#   Settings → Environments → Create "prod"      → Add required reviewers
+#
+# AWS IAM Setup:
+#   Each environment needs an IAM role that trusts the GitHub OIDC provider.
+#   The role must have permissions to manage ECS, ALB, CloudWatch, and
+#   read/write the Terraform state S3 bucket + DynamoDB lock table.
+#
+# To enable deployments:
+#   1. Create the GitHub Environments listed above
+#   2. Set the AWS_ROLE_ARN variable in each environment
+#      (Settings → Environments → <env> → Environment variables)
+#   3. Fill in the TODO values in environments/*/terraform.tfvars and backend.hcl
+#   4. Push to main
+
+name: Deploy Terraform Infrastructure
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "aws-digital-collector-reimagine/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "aws-digital-collector-reimagine/**"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ------------------------------------------------------------------
+  # Validate: runs on every push/PR, no AWS credentials needed
+  # ------------------------------------------------------------------
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aws-digital-collector-reimagine
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Init (local backend)
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+  # ------------------------------------------------------------------
+  # Deploy: dev → qa → prod (only on push to main)
+  # ------------------------------------------------------------------
+
+  deploy-dev:
+    name: Dev
+    needs: validate
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    uses: ./workflows/reusable-deploy-terraform.yml
+    with:
+      environment: dev
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_DEV }}
+      aws-region: us-east-1 # TODO: your AWS region
+    permissions:
+      id-token: write
+      contents: read
+
+  deploy-qa:
+    name: QA
+    needs: deploy-dev
+    uses: ./workflows/reusable-deploy-terraform.yml
+    with:
+      environment: qa
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_QA }}
+      aws-region: us-east-1 # TODO: your AWS region
+    permissions:
+      id-token: write
+      contents: read
+
+  deploy-prod:
+    name: Prod
+    needs: deploy-qa
+    uses: ./workflows/reusable-deploy-terraform.yml
+    with:
+      environment: prod
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_PROD }}
+      aws-region: us-east-1 # TODO: your AWS region
+    permissions:
+      id-token: write
+      contents: read

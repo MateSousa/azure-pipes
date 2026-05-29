@@ -1,0 +1,142 @@
+name: Security Scan (ASH)
+
+on:
+  workflow_call:
+    inputs:
+      source-dir:
+        type: string
+        default: "."
+      scanners:
+        description: "Comma-separated subset (e.g. terraform,python). Empty = auto-detect all."
+        type: string
+        default: ""
+      fail-on-findings:
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+  pull-requests: write
+
+jobs:
+  ash:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: Install ASH
+        run: pipx install git+https://github.com/awslabs/automated-security-helper.git@v3.0.0
+
+      - name: Run ASH
+        env:
+          SCANNERS: ${{ inputs.scanners }}
+        run: |
+          set -e
+          SCANNERS_CLEAN="${SCANNERS// /}"
+          ARGS=(scan --source-dir "${{ inputs.source-dir }}" \
+                --output-dir ./ash_output \
+                --output-format sarif)
+          if [ -n "$SCANNERS_CLEAN" ]; then
+            ARGS+=(--scanners "$SCANNERS_CLEAN")
+          fi
+          ash "${ARGS[@]}"
+
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ./ash_output/reports/ash.sarif
+          category: ash-${{ inputs.source-dir }}
+
+      - name: Upload raw report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ash-report-${{ github.run_id }}
+          path: ./ash_output/
+
+      - name: Build findings table
+        if: always() && github.event_name == 'pull_request'
+        env:
+          SOURCE_DIR: ${{ inputs.source-dir }}
+        run: |
+          python3 <<'PY'
+          import json, os, collections
+          source_dir = os.environ["SOURCE_DIR"]
+          marker = f"<!-- ash-scan:{source_dir} -->"
+          sarif = json.load(open("ash_output/reports/ash.sarif"))
+          rows = []
+          for run in sarif.get("runs", []):
+              tool = run["tool"]["driver"]["name"]
+              for r in run.get("results", []):
+                  level = r.get("level", "note")
+                  rule  = r.get("ruleId", "")
+                  msg   = r.get("message", {}).get("text", "").splitlines()[0][:120]
+                  loc   = r.get("locations", [{}])[0].get("physicalLocation", {})
+                  path  = loc.get("artifactLocation", {}).get("uri", "")
+                  line  = loc.get("region", {}).get("startLine", "")
+                  rows.append((level, tool, rule, f"{path}:{line}", msg))
+
+          sev_order = {"error": 0, "warning": 1, "note": 2}
+          rows.sort(key=lambda r: sev_order.get(r[0], 9))
+          counts = collections.Counter(r[0] for r in rows)
+
+          parts = [
+              marker,
+              f"### ASH security scan (`{source_dir}`)",
+              "",
+              f"**{counts.get('error', 0)} high/critical · "
+              f"{counts.get('warning', 0)} medium · "
+              f"{counts.get('note', 0)} low**",
+              "",
+          ]
+          if rows:
+              parts += [
+                  "| Severity | Tool | Rule | Location | Message |",
+                  "|---|---|---|---|---|",
+              ]
+              parts += [
+                  f"| {s} | {t} | `{r}` | `{l}` | {m} |"
+                  for s, t, r, l, m in rows[:50]
+              ]
+              if len(rows) > 50:
+                  parts += ["", f"_…{len(rows) - 50} more — see the run artifact._"]
+          else:
+              parts.append("_No findings._")
+
+          open("pr-comment.md", "w").write("\n".join(parts))
+          PY
+
+      - name: Upsert PR comment
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          SOURCE_DIR: ${{ inputs.source-dir }}
+        run: |
+          set -e
+          MARKER="<!-- ash-scan:${SOURCE_DIR} -->"
+          EXISTING=$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
+            --jq ".[] | select(.body | startswith(\"${MARKER}\")) | .id" \
+            | head -n1)
+          if [ -n "$EXISTING" ]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${EXISTING}" \
+              -f body="$(cat pr-comment.md)"
+          else
+            gh api -X POST "repos/${REPO}/issues/${PR}/comments" \
+              -f body="$(cat pr-comment.md)"
+          fi
+
+      - name: Fail on findings
+        if: inputs.fail-on-findings
+        run: |
+          if grep -q '"level": "error"' ./ash_output/reports/ash.sarif; then
+            echo "::error::ASH found HIGH/CRITICAL issues — see Security tab or report artifact."
+            exit 1
+          fi

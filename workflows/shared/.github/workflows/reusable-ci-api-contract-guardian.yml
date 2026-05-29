@@ -1,0 +1,117 @@
+# Reusable workflow: API Contract Guardian
+#
+# Runs the AWS Bedrock-backed guardian agent against the PR's changed API
+# files and posts a PASS / VIOLATIONS FOUND comment on the PR.
+# The agent script lives at <agents-path>/api-contract-guardian.mjs.
+#
+# Usage from application repos:
+#   uses: your-org/shared-workflows/.github/workflows/reusable-ci-api-contract-guardian.yml@main
+
+name: API Contract Guardian
+
+on:
+  workflow_call:
+    inputs:
+      api-files-filter:
+        description: "Substring used to filter PR-changed files (passed to grep) — only matching files are sent to the guardian"
+        required: false
+        type: string
+        default: "src/api/"
+      aws-region:
+        description: "AWS region for Bedrock"
+        required: false
+        type: string
+        default: "us-east-1"
+      node-version:
+        description: "Node.js version"
+        required: false
+        type: string
+        default: "20"
+      agents-path:
+        description: "Path to the directory holding api-contract-guardian.mjs and its package.json"
+        required: false
+        type: string
+        default: "agents"
+      runs-on:
+        description: "Runner label"
+        required: false
+        type: string
+        default: "ubuntu-latest"
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      AWS_SESSION_TOKEN:
+        required: true
+      BEDROCK_MODEL_ID:
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  guard:
+    name: Run API Contract Guardian
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Install agent dependencies
+        run: npm install
+        working-directory: ${{ inputs.agents-path }}
+
+      - name: Get changed API files
+        id: changed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          FILTER: ${{ inputs.api-files-filter }}
+        run: |
+          CHANGED=$(gh pr diff "$PR_NUMBER" --name-only | grep "$FILTER" | tr '\n' ',')
+          echo "FILES=$CHANGED" >> "$GITHUB_OUTPUT"
+
+      - name: Run API contract guardian
+        id: guardian
+        env:
+          BEDROCK_MODEL_ID: ${{ secrets.BEDROCK_MODEL_ID }}
+          CHANGED_FILES: ${{ steps.changed.outputs.FILES }}
+        run: |
+          node "${{ inputs.agents-path }}/api-contract-guardian.mjs" > /tmp/guardian.txt
+          echo $? > /tmp/guardian_exit.txt
+          exit 0
+
+      - name: Post guardian result
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          EXIT_CODE=$(cat /tmp/guardian_exit.txt)
+          if [ "$EXIT_CODE" = "0" ]; then
+            STATUS="✅ PASS"
+          else
+            STATUS="❌ VIOLATIONS FOUND"
+          fi
+          {
+            echo "## API Contract Guardian — $STATUS"
+            echo ""
+            cat /tmp/guardian.txt
+            echo ""
+            echo "---"
+            echo "*Checks field name consistency, type safety, and error handling across ${{ inputs.api-files-filter }} files.*"
+          } > /tmp/comment.txt
+          gh pr comment "$PR_NUMBER" --body-file /tmp/comment.txt
+          exit "$EXIT_CODE"

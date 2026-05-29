@@ -1,0 +1,186 @@
+# Reusable workflow: ESLint Guardian
+#
+# Runs the AWS Bedrock-backed ESLint guardian against the PR's changed
+# TypeScript files, posts a PASS / VIOLATIONS FOUND comment, and (optionally)
+# runs an auto-fix agent that commits and pushes the fixes back to the PR
+# branch.
+#
+# Agent scripts expected under <agents-path>:
+#   - eslint-guardian.mjs    (review pass)
+#   - eslint-autofix.mjs     (auto-fix pass)
+#
+# Usage from application repos:
+#   uses: your-org/shared-workflows/.github/workflows/reusable-ci-eslint-guardian.yml@main
+
+name: ESLint Guardian
+
+on:
+  workflow_call:
+    inputs:
+      ts-files-regex:
+        description: "grep -E regex used to select PR-changed TypeScript files"
+        required: false
+        type: string
+        default: 'App\.Modern\.Merged/app-ui/src/.*\.(ts|tsx)$'
+      auto-fix:
+        description: "Run the auto-fix agent when violations are found and push the result back to the PR branch"
+        required: false
+        type: boolean
+        default: true
+      aws-region:
+        description: "AWS region for Bedrock"
+        required: false
+        type: string
+        default: "us-east-1"
+      node-version:
+        description: "Node.js version"
+        required: false
+        type: string
+        default: "20"
+      agents-path:
+        description: "Path to the directory holding eslint-guardian.mjs and eslint-autofix.mjs"
+        required: false
+        type: string
+        default: "agents"
+      runs-on:
+        description: "Runner label"
+        required: false
+        type: string
+        default: "ubuntu-latest"
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      AWS_SESSION_TOKEN:
+        required: true
+      BEDROCK_MODEL_ID:
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  lint:
+    name: Run ESLint Guardian
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Install agent dependencies
+        run: npm install
+        working-directory: ${{ inputs.agents-path }}
+
+      - name: Get changed TS/TSX files
+        id: changed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          FILES_REGEX: ${{ inputs.ts-files-regex }}
+        run: |
+          CHANGED=$(gh pr diff "$PR_NUMBER" --name-only \
+            | grep -E "$FILES_REGEX" \
+            | grep -v node_modules \
+            | tr '\n' ' ')
+          echo "FILES=$CHANGED" >> "$GITHUB_OUTPUT"
+
+      - name: Get PR diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr diff "$PR_NUMBER" > /tmp/pr.diff
+
+      - name: Run ESLint guardian agent
+        id: guardian
+        env:
+          BEDROCK_MODEL_ID: ${{ secrets.BEDROCK_MODEL_ID }}
+          CHANGED_FILES: ${{ steps.changed.outputs.FILES }}
+          PR_DIFF_FILE: /tmp/pr.diff
+        run: |
+          set +e
+          node "${{ inputs.agents-path }}/eslint-guardian.mjs" > /tmp/guardian.txt
+          echo $? > /tmp/guardian_exit.txt
+
+      - name: Post guardian result
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          EXIT_CODE=$(cat /tmp/guardian_exit.txt)
+          if [ "$EXIT_CODE" = "0" ]; then
+            STATUS="✅ PASS"
+          else
+            STATUS="❌ VIOLATIONS FOUND"
+          fi
+          {
+            echo "## ESLint Guardian — $STATUS"
+            echo ""
+            cat /tmp/guardian.txt
+            echo ""
+            echo "---"
+            echo "*Claude code review on changed TypeScript files.*"
+          } > /tmp/comment.txt
+          gh pr comment "$PR_NUMBER" --body-file /tmp/comment.txt
+
+      - name: Auto-fix violations
+        if: always() && inputs.auto-fix
+        env:
+          BEDROCK_MODEL_ID: ${{ secrets.BEDROCK_MODEL_ID }}
+          VIOLATIONS_FILE: /tmp/guardian.txt
+          CHANGED_FILES: ${{ steps.changed.outputs.FILES }}
+          REPO_ROOT: ${{ github.workspace }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          EXIT_CODE=$(cat /tmp/guardian_exit.txt 2>/dev/null || echo 0)
+          if [ "$EXIT_CODE" = "0" ]; then
+            echo "No violations — skipping auto-fix."
+            exit 0
+          fi
+          echo "Violations found — running auto-fix agent..."
+          set +e
+          node "${{ inputs.agents-path }}/eslint-autofix.mjs" > /tmp/autofix.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "Auto-fix made no file changes."
+            gh pr comment "$PR_NUMBER" \
+              --body "🤖 **ESLint Auto-fix:** Reviewed violations but no automatic fixes could be applied — manual review required."
+          else
+            git commit -m "🤖 auto-fix: ESLint violations (guardian)"
+            git push origin "HEAD:${HEAD_REF}"
+            echo "committed" > /tmp/autofix_committed
+            {
+              echo "🤖 **ESLint Auto-fix applied** — review the new commit before merging."
+              echo ""
+              cat /tmp/autofix.txt
+            } > /tmp/autofix_comment.txt
+            gh pr comment "$PR_NUMBER" --body-file /tmp/autofix_comment.txt
+          fi
+
+      - name: Final result
+        if: always()
+        run: |
+          COMMITTED=$(cat /tmp/autofix_committed 2>/dev/null || echo "")
+          if [ -n "$COMMITTED" ]; then
+            exit 0
+          fi
+          exit $(cat /tmp/guardian_exit.txt 2>/dev/null || echo 0)

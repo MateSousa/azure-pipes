@@ -1,0 +1,310 @@
+# Plan_Deploy_Terraform.yaml
+# Terraform Infrastructure Pipeline — Dev & Prod with approval gate
+# Uses AzureCLI@2 with azureSubscription for authentication
+
+trigger:
+  branches:
+    include:
+      - '*'
+  paths:
+    include:
+      - 'terraform/*'
+
+variables:
+  # Terraform
+  - name: terraformVersion
+    value: '1.9.x'
+  - name: terraformWorkingDirectory
+    value: '$(Build.SourcesDirectory)/terraform'
+
+  # Dev environment
+  - name: devResourceGroupName
+    value: '<dev-resource-group>'           # UPDATE if different
+  - name: devAzureSubscription
+    value: 'Dev'
+  - name: devBackendStorageAccount
+    value: '<dev-storage-account>'                 # UPDATE THIS
+  - name: devBackendContainerName
+    value: 'tfstate'
+  - name: devBackendKey
+    value: 'dev.terraform.tfstate'
+
+  # Prod environment
+  - name: prodResourceGroupName
+    value: '<prod-resource-group>'           # UPDATE if different
+  - name: prodAzureSubscription
+    value: 'Prod'
+  - name: prodBackendStorageAccount
+    value: '<prod-storage-account>'                # UPDATE THIS
+  - name: prodBackendContainerName
+    value: 'tfstate'
+  - name: prodBackendKey
+    value: 'prod.terraform.tfstate'
+
+stages:
+  # ============================================
+  # Stage 1: Validate
+  # Runs on ALL branches
+  # ============================================
+  - stage: Validate
+    displayName: Terraform Validate
+    jobs:
+      - job: Validate
+        displayName: Validate Terraform configuration
+        pool:
+          name: 'Self-Hosted'
+        steps:
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform $(terraformVersion)'
+            inputs:
+              terraformVersion: '$(terraformVersion)'
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Init'
+            inputs:
+              azureSubscription: '$(devAzureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                export ARM_USE_CLI=true
+                terraform -chdir=$(terraformWorkingDirectory) init \
+                  -backend-config="resource_group_name=$(devResourceGroupName)" \
+                  -backend-config="storage_account_name=$(devBackendStorageAccount)" \
+                  -backend-config="container_name=$(devBackendContainerName)" \
+                  -backend-config="key=$(devBackendKey)"
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Validate'
+            inputs:
+              azureSubscription: '$(devAzureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                terraform -chdir=$(terraformWorkingDirectory) validate
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Format Check'
+            inputs:
+              azureSubscription: '$(devAzureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                terraform -chdir=$(terraformWorkingDirectory) fmt -check -recursive
+
+  # ============================================
+  # Stage 2: Plan Dev
+  # Runs on ALL branches
+  # ============================================
+  - stage: PlanDev
+    displayName: Plan Dev
+    dependsOn: Validate
+    jobs:
+      - job: PlanDev
+        displayName: Terraform Plan (Dev)
+        pool:
+          name: 'Self-Hosted'
+        steps:
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform $(terraformVersion)'
+            inputs:
+              terraformVersion: '$(terraformVersion)'
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Init'
+            inputs:
+              azureSubscription: '$(devAzureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                export ARM_USE_CLI=true
+                terraform -chdir=$(terraformWorkingDirectory) init \
+                  -backend-config="resource_group_name=$(devResourceGroupName)" \
+                  -backend-config="storage_account_name=$(devBackendStorageAccount)" \
+                  -backend-config="container_name=$(devBackendContainerName)" \
+                  -backend-config="key=$(devBackendKey)"
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Plan'
+            inputs:
+              azureSubscription: '$(devAzureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                export ARM_USE_CLI=true
+                terraform -chdir=$(terraformWorkingDirectory) plan \
+                  -var-file=environments/dev.tfvars \
+                  -out=dev.tfplan
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Dev Plan'
+            inputs:
+              targetPath: '$(terraformWorkingDirectory)/dev.tfplan'
+              artifact: 'dev-tfplan'
+              publishLocation: 'pipeline'
+
+  # ============================================
+  # Stage 3: Apply Dev
+  # Runs on MAIN branch only
+  # ============================================
+  - stage: ApplyDev
+    displayName: Apply Dev
+    dependsOn: PlanDev
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: ApplyDev
+        displayName: Terraform Apply (Dev)
+        pool:
+          name: 'Self-Hosted'
+        environment: 'Dev'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: DownloadPipelineArtifact@2
+                  displayName: 'Download Dev Plan'
+                  inputs:
+                    buildType: 'current'
+                    artifactName: 'dev-tfplan'
+                    targetPath: '$(terraformWorkingDirectory)'
+
+                - task: TerraformInstaller@1
+                  displayName: 'Install Terraform $(terraformVersion)'
+                  inputs:
+                    terraformVersion: '$(terraformVersion)'
+
+                - task: AzureCLI@2
+                  displayName: 'Terraform Init'
+                  inputs:
+                    azureSubscription: '$(devAzureSubscription)'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      export ARM_USE_CLI=true
+                      terraform -chdir=$(terraformWorkingDirectory) init \
+                        -backend-config="resource_group_name=$(devResourceGroupName)" \
+                        -backend-config="storage_account_name=$(devBackendStorageAccount)" \
+                        -backend-config="container_name=$(devBackendContainerName)" \
+                        -backend-config="key=$(devBackendKey)"
+
+                - task: AzureCLI@2
+                  displayName: 'Terraform Apply'
+                  inputs:
+                    azureSubscription: '$(devAzureSubscription)'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      export ARM_USE_CLI=true
+                      terraform -chdir=$(terraformWorkingDirectory) apply dev.tfplan
+
+  # ============================================
+  # Stage 4: Plan Prod
+  # Runs on MAIN branch only
+  # ============================================
+  - stage: PlanProd
+    displayName: Plan Prod
+    dependsOn: ApplyDev
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: PlanProd
+        displayName: Terraform Plan (Prod)
+        pool:
+          name: 'Self-Hosted'
+        steps:
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform $(terraformVersion)'
+            inputs:
+              terraformVersion: '$(terraformVersion)'
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Init'
+            inputs:
+              azureSubscription: '$(prodAzureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                export ARM_USE_CLI=true
+                terraform -chdir=$(terraformWorkingDirectory) init \
+                  -backend-config="resource_group_name=$(prodResourceGroupName)" \
+                  -backend-config="storage_account_name=$(prodBackendStorageAccount)" \
+                  -backend-config="container_name=$(prodBackendContainerName)" \
+                  -backend-config="key=$(prodBackendKey)"
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Plan'
+            inputs:
+              azureSubscription: '$(prodAzureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                export ARM_USE_CLI=true
+                terraform -chdir=$(terraformWorkingDirectory) plan \
+                  -var-file=environments/prod.tfvars \
+                  -out=prod.tfplan
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Prod Plan'
+            inputs:
+              targetPath: '$(terraformWorkingDirectory)/prod.tfplan'
+              artifact: 'prod-tfplan'
+              publishLocation: 'pipeline'
+
+  # ============================================
+  # Stage 5: Apply Prod
+  # Runs on MAIN branch only
+  # Uses 'Production' environment for approval gate
+  # Configure approval: Project Settings → Environments →
+  #   Production → Approvals and checks → Add → Approvals
+  # ============================================
+  - stage: ApplyProd
+    displayName: Apply Prod
+    dependsOn: PlanProd
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: ApplyProd
+        displayName: Terraform Apply (Prod)
+        pool:
+          name: 'Self-Hosted'
+        environment: 'Production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: DownloadPipelineArtifact@2
+                  displayName: 'Download Prod Plan'
+                  inputs:
+                    buildType: 'current'
+                    artifactName: 'prod-tfplan'
+                    targetPath: '$(terraformWorkingDirectory)'
+
+                - task: TerraformInstaller@1
+                  displayName: 'Install Terraform $(terraformVersion)'
+                  inputs:
+                    terraformVersion: '$(terraformVersion)'
+
+                - task: AzureCLI@2
+                  displayName: 'Terraform Init'
+                  inputs:
+                    azureSubscription: '$(prodAzureSubscription)'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      export ARM_USE_CLI=true
+                      terraform -chdir=$(terraformWorkingDirectory) init \
+                        -backend-config="resource_group_name=$(prodResourceGroupName)" \
+                        -backend-config="storage_account_name=$(prodBackendStorageAccount)" \
+                        -backend-config="container_name=$(prodBackendContainerName)" \
+                        -backend-config="key=$(prodBackendKey)"
+
+                - task: AzureCLI@2
+                  displayName: 'Terraform Apply'
+                  inputs:
+                    azureSubscription: '$(prodAzureSubscription)'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      export ARM_USE_CLI=true
+                      terraform -chdir=$(terraformWorkingDirectory) apply prod.tfplan

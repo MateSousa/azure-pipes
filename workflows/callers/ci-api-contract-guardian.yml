@@ -1,0 +1,22 @@
+# Caller workflow: API Contract Guardian
+# Place this in the application repo at .github/workflows/ci-api-contract-guardian.yml
+
+name: API Contract Guardian
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [development]
+    paths:
+      - 'App.Modern.Merged/app-ui/src/api/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  guard:
+    uses: your-org/shared-workflows/.github/workflows/reusable-ci-api-contract-guardian.yml@main
+    with:
+      runs-on: ubuntu-latest-4-cores
+    secrets: inherit

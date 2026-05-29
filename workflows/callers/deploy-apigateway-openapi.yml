@@ -1,0 +1,95 @@
+# Caller workflow: Deploy an OpenAPI schema to the project's HTTP API v2.
+# Place this in the API code repo at .github/workflows/deploy-apigateway-openapi.yml.
+#
+# Repo variables expected (Settings → Secrets and variables → Actions → Variables):
+#
+#   Per environment (DEV / CP / PROD):
+#     AWS_ROLE_ARN_<ENV>             OIDC role for that env's AWS account
+#     API_GATEWAY_ID_<ENV>           HTTP API v2 ApiId (output `api_id` of the TF module)
+#     VPC_LINK_ID_<ENV>              Only if openapi.yaml has HTTP_PROXY routes
+#     BACKEND_ALB_LISTENER_ARN_<ENV> Only if openapi.yaml has HTTP_PROXY routes
+#     LAMBDA_<NAME>_INVOKE_ARN_<ENV> One set per Lambda referenced from an
+#                                    `x-amazon-apigateway-integration: aws_proxy`
+#                                    block in openapi.yaml.
+#
+# Every Lambda referenced from openapi.yaml must also appear in the API
+# Gateway Terraform module's `invokable_lambdas` list — that's where the
+# lambda:InvokeFunction permission is granted.
+
+name: Deploy OpenAPI to API Gateway
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "openapi.yaml"
+      - "openapi/**"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - cp
+          - prod
+        default: dev
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ========== Dev (push to main or workflow_dispatch) ==========
+  deploy-dev:
+    name: openapi → Dev
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'dev')
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-apigateway-openapi.yml@main
+    with:
+      environment: dev
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_DEV }}
+      aws-region: us-east-1
+      api-id: ${{ vars.API_GATEWAY_ID_DEV }}
+      openapi-file: openapi.yaml
+      openapi-substitutions: |
+        LAMBDA_GET_USER_INVOKE_ARN=${{ vars.LAMBDA_GET_USER_INVOKE_ARN_DEV }}
+        LAMBDA_DASHBOARD_INVOKE_ARN=${{ vars.LAMBDA_DASHBOARD_INVOKE_ARN_DEV }}
+        BACKEND_ALB_LISTENER_ARN=${{ vars.BACKEND_ALB_LISTENER_ARN_DEV }}
+        VPC_LINK_ID=${{ vars.VPC_LINK_ID_DEV }}
+
+  # ========== CP (workflow_dispatch only) ==========
+  deploy-cp:
+    name: openapi → CP
+    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'cp'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-apigateway-openapi.yml@main
+    with:
+      environment: cp
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_CP }}
+      aws-region: us-east-1
+      api-id: ${{ vars.API_GATEWAY_ID_CP }}
+      openapi-file: openapi.yaml
+      openapi-substitutions: |
+        LAMBDA_GET_USER_INVOKE_ARN=${{ vars.LAMBDA_GET_USER_INVOKE_ARN_CP }}
+        LAMBDA_DASHBOARD_INVOKE_ARN=${{ vars.LAMBDA_DASHBOARD_INVOKE_ARN_CP }}
+        BACKEND_ALB_LISTENER_ARN=${{ vars.BACKEND_ALB_LISTENER_ARN_CP }}
+        VPC_LINK_ID=${{ vars.VPC_LINK_ID_CP }}
+
+  # ========== Prod (workflow_dispatch only) ==========
+  deploy-prod:
+    name: openapi → Prod
+    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'prod'
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy-apigateway-openapi.yml@main
+    with:
+      environment: prod
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN_PROD }}
+      aws-region: us-east-1
+      api-id: ${{ vars.API_GATEWAY_ID_PROD }}
+      openapi-file: openapi.yaml
+      openapi-substitutions: |
+        LAMBDA_GET_USER_INVOKE_ARN=${{ vars.LAMBDA_GET_USER_INVOKE_ARN_PROD }}
+        LAMBDA_DASHBOARD_INVOKE_ARN=${{ vars.LAMBDA_DASHBOARD_INVOKE_ARN_PROD }}
+        BACKEND_ALB_LISTENER_ARN=${{ vars.BACKEND_ALB_LISTENER_ARN_PROD }}
+        VPC_LINK_ID=${{ vars.VPC_LINK_ID_PROD }}

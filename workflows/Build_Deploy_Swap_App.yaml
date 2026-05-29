@@ -1,0 +1,243 @@
+# Unified App Build/Deploy/Swap Pipeline
+# Consolidates Build_Deploy_Swap_App_Dev.yaml and Build_Deploy_Swap_App.yaml
+#
+# Branch routing:
+#   - All branches:  Build → Deploy DEV → Swap DEV
+#   - main branch:   Build → Deploy DEV → Swap DEV
+#                          → Deploy PROD (approval) → Swap PROD
+#
+# Approval: Configure in Project Settings → Environments → PROD → Approvals and checks
+
+trigger:
+  branches:
+    include:
+      - '*'
+
+variables:
+  - name: tag
+    value: '$(Build.BuildId)'
+  - name: buildConfiguration
+    value: 'Release'
+
+  # ── Dev environment ──
+  - name: devResourceGroupName
+    value: '<dev-resource-group>'
+  - name: devAppName
+    value: 'app-service-01'
+  - name: devAzureSubscription
+    value: 'Dev'
+  - name: devSlotName
+    value: 'app-service-01-deploy'
+
+  # ── Prod environment ──
+  - name: prodResourceGroupName
+    value: '<prod-resource-group>'
+  - name: prodAppName
+    value: '<prod-app-name>'
+  - name: prodAzureSubscription
+    value: 'Prod'
+  - name: prodSlotName
+    value: 'app-webapp2-prod'
+
+stages:
+  # ============================================
+  # Stage 1: Build
+  # Runs on all branches
+  # ============================================
+  - stage: Build
+    displayName: Build and publish stage
+    jobs:
+      - job: Build
+        displayName: Build job
+        timeoutInMinutes: 0
+        pool:
+          name: 'Self-Hosted'
+        workspace:
+          clean: all
+        steps:
+          # ── Lightweight dummy build (for testing pipeline flow) ──
+          - task: PowerShell@2
+            displayName: 'Create dummy artifact'
+            inputs:
+              targetType: 'inline'
+              script: |
+                $outDir = "$(Build.ArtifactStagingDirectory)"
+                $html = "<html><body><h1>Pipeline test - Build $(Build.BuildId)</h1></body></html>"
+                $html | Out-File "$outDir\index.html" -Encoding utf8
+                Compress-Archive -Path "$outDir\index.html" -DestinationPath "$outDir\App4_5.zip" -Force
+                Write-Host "Created dummy App4_5.zip"
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish artifact'
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)/App4_5.zip'
+              artifact: 'drop'
+              publishLocation: 'pipeline'
+
+          # ── Real .NET build (commented out — uncomment when pipeline flow is verified) ──
+          # - task: NuGetCommand@2
+          #   displayName: 'Nuget v2 Restore'
+          #   inputs:
+          #     command: restore
+          #     restoreSolution: '**/*.sln'
+          #
+          # - task: VSBuild@1
+          #   displayName: 'Build solution'
+          #   inputs:
+          #     solution: '**/*.sln'
+          #     msbuildArgs: '/p:DeployOnBuild=true /p:DeployDefaultTarget=WebPublish /p:WebPublishMethod=FileSystem /p:DeleteExistingFiles=True /p:publishUrl="$(Build.ArtifactStagingDirectory)\\WebAppContent"'
+          #     platform: 'Any CPU'
+          #     configuration: '$(buildConfiguration)'
+          #
+          # - task: PowerShell@2
+          #   displayName: 'Inject Build Number'
+          #   inputs:
+          #     targetType: 'inline'
+          #     script: |
+          #       $version = "4.5.$(Build.BuildId)"
+          #       $webConfigPath = "$(Build.ArtifactStagingDirectory)\\WebAppContent\\Master\\Web.config"
+          #       if (Test-Path $webConfigPath) {
+          #           $xml = [xml](Get-Content $webConfigPath)
+          #           $appVersionNode = $xml.configuration.appSettings.add | Where-Object { $_.key -eq 'AppVersion' }
+          #           if ($appVersionNode) {
+          #               $appVersionNode.value = $version
+          #               $xml.Save($webConfigPath)
+          #               Write-Host "Web.config updated: $version"
+          #           }
+          #       }
+          #
+          # - task: ArchiveFiles@2
+          #   displayName: 'Archive build output'
+          #   inputs:
+          #     rootFolderOrFile: '$(Build.ArtifactStagingDirectory)\\WebAppContent'
+          #     includeRootFolder: false
+          #     archiveType: 'zip'
+          #     archiveFile: '$(Build.ArtifactStagingDirectory)/App4_5.zip'
+          #     replaceExistingArchive: true
+          #
+          # - task: PublishPipelineArtifact@1
+          #   displayName: 'Publish artifact'
+          #   inputs:
+          #     targetPath: '$(Build.ArtifactStagingDirectory)/App4_5.zip'
+          #     artifact: 'drop'
+          #     publishLocation: 'pipeline'
+
+  # ============================================
+  # Stage 2: Deploy to DEV
+  # Runs on all branches
+  # ============================================
+  - stage: DeployDev
+    displayName: Deploy to DEV
+    dependsOn:
+      - Build
+    jobs:
+      - deployment: Deploy
+        displayName: Deploy to Dev
+        timeoutInMinutes: 0
+        pool:
+          name: 'Self-Hosted'
+        environment: 'DEV'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureRmWebAppDeployment@4
+                  displayName: 'Deploy to Dev App Service'
+                  inputs:
+                    ConnectionType: 'AzureRM'
+                    ResourceGroupName: '$(devResourceGroupName)'
+                    azureSubscription: '$(devAzureSubscription)'
+                    appType: 'webApp'
+                    deployToSlotOrASE: true
+                    WebAppName: '$(devAppName)'
+                    SlotName: '$(devSlotName)'
+                    packageForLinux: '$(Pipeline.Workspace)/drop/App4_5.zip'
+                    enableCustomDeployment: true
+                    DeploymentType: 'zipDeploy'
+                    TakeAppOfflineFlag: false
+                    enableXmlTransform: true
+
+  # ============================================
+  # Stage 3: Swap DEV slots
+  # Runs on all branches
+  # ============================================
+  - stage: SwapDev
+    displayName: Swap Dev Slots
+    dependsOn:
+      - DeployDev
+    jobs:
+      - job: Swap
+        displayName: Swap Dev
+        timeoutInMinutes: 0
+        pool:
+          name: 'Self-Hosted'
+        steps:
+          - task: AzureAppServiceManage@0
+            displayName: 'Swap Slots'
+            inputs:
+              azureSubscription: '$(devAzureSubscription)'
+              Action: 'Swap Slots'
+              WebAppName: '$(devAppName)'
+              ResourceGroupName: '$(devResourceGroupName)'
+              SourceSlot: '$(devSlotName)'
+
+  # ============================================
+  # Stage 4: Deploy to PROD
+  # Runs on main branch only — requires PROD environment approval
+  # ============================================
+  - stage: DeployProd
+    displayName: Deploy to PROD
+    dependsOn:
+      - Build
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: Deploy
+        displayName: Deploy to Prod
+        timeoutInMinutes: 0
+        pool:
+          name: 'Self-Hosted'
+        environment: 'PROD'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureRmWebAppDeployment@4
+                  displayName: 'Deploy to Prod App Service'
+                  inputs:
+                    ConnectionType: 'AzureRM'
+                    ResourceGroupName: '$(prodResourceGroupName)'
+                    azureSubscription: '$(prodAzureSubscription)'
+                    appType: 'webApp'
+                    deployToSlotOrASE: true
+                    WebAppName: '$(prodAppName)'
+                    SlotName: '$(prodSlotName)'
+                    packageForLinux: '$(Pipeline.Workspace)/drop/App4_5.zip'
+                    enableCustomDeployment: true
+                    DeploymentType: 'zipDeploy'
+                    TakeAppOfflineFlag: false
+                    enableXmlTransform: true
+
+  # ============================================
+  # Stage 5: Swap PROD slots
+  # Runs on main branch only
+  # ============================================
+  - stage: SwapProd
+    displayName: Swap Production Slots
+    dependsOn:
+      - DeployProd
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: Swap
+        displayName: Swap Prod
+        timeoutInMinutes: 0
+        pool:
+          name: 'Self-Hosted'
+        steps:
+          - task: AzureAppServiceManage@0
+            displayName: 'Swap Slots'
+            inputs:
+              azureSubscription: '$(prodAzureSubscription)'
+              Action: 'Swap Slots'
+              WebAppName: '$(prodAppName)'
+              ResourceGroupName: '$(prodResourceGroupName)'
+              SourceSlot: '$(prodSlotName)'

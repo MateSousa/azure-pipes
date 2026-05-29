@@ -1,0 +1,91 @@
+# Reusable workflow: Schema Drift Detector
+#
+# Runs the AWS Bedrock-backed schema drift detector against the configured
+# Jira project. Typically invoked on a schedule (weekly) and manually.
+# The agent script lives at <agents-path>/schema-drift-detector.mjs.
+#
+# Usage from application repos:
+#   uses: your-org/shared-workflows/.github/workflows/reusable-ci-schema-drift-detector.yml@main
+
+name: Schema Drift Detector
+
+on:
+  workflow_call:
+    inputs:
+      jira-base-url:
+        description: "Jira base URL the agent queries"
+        required: false
+        type: string
+        default: "https://your-org.atlassian.net"
+      jira-project:
+        description: "Jira project key the agent scans (e.g. RQ, APP)"
+        required: true
+        type: string
+      aws-region:
+        description: "AWS region for Bedrock"
+        required: false
+        type: string
+        default: "us-east-1"
+      node-version:
+        description: "Node.js version"
+        required: false
+        type: string
+        default: "20"
+      agents-path:
+        description: "Path to the directory holding schema-drift-detector.mjs and its package.json"
+        required: false
+        type: string
+        default: "agents"
+      runs-on:
+        description: "Runner label"
+        required: false
+        type: string
+        default: "ubuntu-latest"
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      AWS_SESSION_TOKEN:
+        required: true
+      BEDROCK_MODEL_ID:
+        required: true
+      JIRA_USERNAME:
+        required: true
+      JIRA_API_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  detect-drift:
+    name: Run Schema Drift Detector
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Install agent dependencies
+        run: npm install
+        working-directory: ${{ inputs.agents-path }}
+
+      - name: Run schema drift detector
+        env:
+          BEDROCK_MODEL_ID: ${{ secrets.BEDROCK_MODEL_ID }}
+          JIRA_URL: ${{ inputs.jira-base-url }}
+          JIRA_USERNAME: ${{ secrets.JIRA_USERNAME }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT: ${{ inputs.jira-project }}
+        run: node "${{ inputs.agents-path }}/schema-drift-detector.mjs"

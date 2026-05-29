@@ -1,0 +1,21 @@
+# Claude Code / MCP tooling
+.mcp.json
+.playwright-mcp/
+
+# Drawio temp / lock / backup files
+.$*
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+.terraform.tfstate.lock.info
+crash.log
+crash.*.log
+
+# Local docs WIP (auth diagram + AI planning artifacts)
+docs/auth-architecture.drawio
+docs/auth-architecture.html
+docs/generate_auth_diagram.py
+docs/superpowers/

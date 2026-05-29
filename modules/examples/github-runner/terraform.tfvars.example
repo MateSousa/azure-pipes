@@ -1,0 +1,9 @@
+region       = "us-east-1"
+project_name = "myproject"
+
+ecs_cluster_arn = "arn:aws:ecs:us-east-1:123456789012:cluster/myproject-main"
+vpc_id          = "vpc-00000000000000000"
+subnet_ids      = ["subnet-aaa", "subnet-bbb"]
+
+dispatcher_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/myproject-github-runner-dispatcher:v1"
+runner_image_uri     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/myproject-github-runner:v1"

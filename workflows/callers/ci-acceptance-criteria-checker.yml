@@ -1,0 +1,22 @@
+# Caller workflow: Acceptance Criteria Checker
+# Place this in the application repo at .github/workflows/ci-acceptance-criteria-checker.yml
+
+name: Acceptance Criteria Checker
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [development]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ac-check:
+    uses: your-org/shared-workflows/.github/workflows/reusable-ci-acceptance-criteria-checker.yml@main
+    with:
+      # Switch to 'false' here or set the repo variable to opt out of parent-ticket fallback (APP-1218).
+      jira-inherit-ac-from-parent: ${{ vars.JIRA_INHERIT_AC_FROM_PARENT || 'true' }}
+      runs-on: ubuntu-latest-4-cores
+    secrets: inherit
